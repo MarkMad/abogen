@@ -664,11 +664,20 @@ class ConversionService:
         return removed
 
     def shutdown(self) -> None:
-        self._stop_event.set()
-        self._wake_event.set()
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=5)
-            self._worker_thread = None
+        with self._lock:
+            self._stop_event.set()
+            self._wake_event.set()
+            # Cancellation wakes paused conversions and stops active work at
+            # its next boundary. Queued jobs remain available for restart.
+            for job_id in list(self._active_jobs):
+                self.cancel(job_id)
+            worker = self._worker_thread
+        if worker is not None:
+            # The worker needs the service lock to finish, so join outside it.
+            worker.join(timeout=5)
+            with self._lock:
+                if self._worker_thread is worker and not worker.is_alive():
+                    self._worker_thread = None
 
     # Internal -----------------------------------------------------------
     def _ensure_directories(self) -> None:

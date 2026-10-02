@@ -41,7 +41,7 @@ def test_cancel_queued_paused_job_finalizes_and_persists(service, tmp_path):
     assert restored.finished_at == job.finished_at
 
 
-@pytest.mark.parametrize("action", ["resume", "cancel"])
+@pytest.mark.parametrize("action", ["resume", "cancel", "shutdown"])
 def test_running_job_waits_at_boundary_and_wakes(service, tmp_path, action):
     job = enqueue(service, tmp_path)
     entered = threading.Event()
@@ -70,6 +70,7 @@ def test_running_job_waits_at_boundary_and_wakes(service, tmp_path, action):
     service._runner = runner
     service._queue.remove(job.id)
     worker = threading.Thread(target=service._run_job, args=(job,))
+    service._worker_thread = worker
     worker.start()
     try:
         assert entered.wait(3)
@@ -80,8 +81,13 @@ def test_running_job_waits_at_boundary_and_wakes(service, tmp_path, action):
         assert job.status == JobStatus.PAUSED
         assert not continued.wait(0.05)
         assert not service.delete(job.id)
-        assert getattr(service, action)(job.id)
+        if action == "shutdown":
+            service.shutdown()
+            assert service._worker_thread is None
+        else:
+            assert getattr(service, action)(job.id)
         worker.join(3)
+
         assert not worker.is_alive()
         assert continued.is_set() == (action == "resume")
         assert job.status == (JobStatus.COMPLETED if action == "resume" else JobStatus.CANCELLED)
@@ -91,6 +97,26 @@ def test_running_job_waits_at_boundary_and_wakes(service, tmp_path, action):
         service.cancel(job.id)
         boundary.set()
         worker.join(3)
+
+
+def test_shutdown_retains_worker_after_join_timeout(monkeypatch, tmp_path):
+    from unittest.mock import Mock, patch
+
+    monkeypatch.setenv("ABOGEN_QUEUE_STATE_PATH", str(tmp_path / "queue.json"))
+    service = ConversionService(tmp_path / "outputs", lambda job: None)
+    worker = Mock()
+    worker.is_alive.return_value = True
+    service._worker_thread = worker
+    service.shutdown()
+    worker.join.assert_called_once_with(timeout=5)
+    assert service._worker_thread is worker
+    with patch("abogen.webui.service.threading.Thread") as spawn:
+        service._ensure_worker()
+        spawn.assert_not_called()
+    assert service._stop_event.is_set()
+    worker.is_alive.return_value = False
+    service.shutdown()
+    assert service._worker_thread is None
 
 
 def test_retry_preserves_complete_conversion_request(service, tmp_path):
