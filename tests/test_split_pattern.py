@@ -9,6 +9,12 @@ from abogen.domain.enums import Language
 from abogen.domain.split_pattern import get_split_pattern
 
 
+@pytest.mark.parametrize("language", list(Language))
+@pytest.mark.parametrize("mode", ["Disabled", "Line", "Sentence", "Sentence + Comma", "Sentence + Highlighting", "5 words"])
+def test_string_codes_match_enums(language, mode):
+    assert get_split_pattern(language.value, mode) == get_split_pattern(language, mode)
+
+
 # --- English: newline-only for Disabled/Line, punctuation-based for sentence modes ---
 
 class TestEnglish:

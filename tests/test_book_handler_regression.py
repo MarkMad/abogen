@@ -3,6 +3,8 @@ import os
 import sys
 import shutil
 import time
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from PyQt6.QtWidgets import QApplication
 
 # Ensure we can import the module
@@ -17,11 +19,66 @@ app = QApplication(sys.argv)
 
 class TestBookHandlerRegression(unittest.TestCase):
 
+    def _fake_parser(self):
+        return SimpleNamespace(
+            file_type="epub",
+            content_texts={"chapter": "Chapter content. " * 100},
+            content_lengths={"chapter": 1600},
+            processed_nav_structure=[
+                {"title": "Chapter", "src": "chapter", "children": []}
+            ],
+            process_content=Mock(),
+            get_metadata=lambda: {"title": "Book", "authors": ["Jane Doe"]},
+        )
+
+    def test_immediate_selected_text_finalizes_tree_once(self):
+        with patch("abogen.pyqt.book_handler.get_book_parser", return_value=self._fake_parser()):
+            dialog = HandlerDialog(self.sample_epub_path)
+        try:
+            text, selected = dialog.get_selected_text()
+            self.assertIn("Chapter content.", text)
+            self.assertEqual(selected, {"chapter"})
+            dialog.deselect_all_chapters()
+            app.processEvents()
+            text, selected = dialog.get_selected_text()
+            self.assertEqual(selected, set())
+            self.assertNotIn("Chapter content.", text)
+        finally:
+            dialog.close()
+
+    def test_failed_load_is_visible_and_can_be_retried(self):
+        parser = self._fake_parser()
+        parser.process_content.side_effect = RuntimeError("temporary failure")
+        with patch("abogen.pyqt.book_handler.get_book_parser", return_value=parser):
+            dialog = HandlerDialog(self.sample_epub_path)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "temporary failure"):
+                dialog.get_selected_text()
+            app.processEvents()
+            self.assertIn("temporary failure", dialog.previewEdit.toPlainText())
+            self.assertFalse(dialog._ok_button.isEnabled())
+            self.assertFalse(HandlerDialog._content_cache)
+        finally:
+            dialog.close()
+
+        with patch("abogen.pyqt.book_handler.get_book_parser", return_value=self._fake_parser()):
+            retry = HandlerDialog(self.sample_epub_path)
+        try:
+            text, selected = retry.get_selected_text()
+            self.assertIn("Chapter content.", text)
+            self.assertEqual(selected, {"chapter"})
+            self.assertTrue(retry._ok_button.isEnabled())
+        finally:
+            retry.close()
+
     def setUp(self):
         self.test_dir = "tests/test_data_handler"
         if os.path.exists(self.test_dir):
             shutil.rmtree(self.test_dir)
         os.makedirs(self.test_dir)
+        cache_patch = patch("abogen.utils.get_user_cache_path", return_value=self.test_dir)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
         self.sample_epub_path = os.path.join(self.test_dir, "test_book.epub")
         self._create_sample_epub()
 

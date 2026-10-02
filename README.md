@@ -291,6 +291,10 @@ abogen-web
 ```
 Then open http://localhost:8808 and drag in your documents. Jobs run in the background worker and the browser updates automatically.
 
+The server listens on `127.0.0.1` by default, so only this computer can access it.
+Setting `ABOGEN_HOST=0.0.0.0` explicitly enables network access. The app has no
+built-in authentication; use an authenticated HTTPS reverse proxy for remote access.
+
 <img title="Abogen in action" src='https://raw.githubusercontent.com/denizsafak/abogen/refs/heads/main/demo/abogen-webui.png'> 
 
 ## `Using the web UI`
@@ -309,7 +313,7 @@ You can build a lightweight container image directly from the repository root:
 docker build -t abogen .
 mkdir -p ~/abogen-data/uploads ~/abogen-data/outputs
 docker run --rm \
-  -p 8808:8808 \
+  -p 127.0.0.1:8808:8808 \
   -v ~/abogen-data:/data \
   --name abogen \
   abogen
@@ -321,6 +325,7 @@ Browse to http://localhost:8808. Uploaded source files are stored in `/data/uplo
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `ABOGEN_HOST` | `0.0.0.0` | Bind address for the Flask server |
+| `ABOGEN_BIND_ADDRESS` | `127.0.0.1` | Docker Compose host address for the published port (bridge mode) |
 | `ABOGEN_PORT` | `8808` | HTTP port |
 | `ABOGEN_DEBUG` | `false` | Enable Flask debug mode |
 | `ABOGEN_UPLOAD_ROOT` | `/data/uploads` | Directory where uploaded files are stored |

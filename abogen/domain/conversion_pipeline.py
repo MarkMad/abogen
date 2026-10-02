@@ -49,7 +49,7 @@ def spacy_pre_tts_segmentation(
 
     Args:
         text: Text to segment.
-        lang_code: Language code (Language enum or string like "a", "de", "fr").
+        lang_code: Language enum or ISO code like "en-US", "de", "fr".
         subtitle_mode: SubtitleMode enum or string.
         is_subtitle_input: True if source is .srt/.ass/.vtt file.
         use_spacy_segmentation: User toggle for spaCy segmentation.
@@ -70,7 +70,7 @@ def spacy_pre_tts_segmentation(
     lang_enum = _to_language_enum(lang_code)
 
     # Default split pattern
-    default_split = get_split_pattern(lang_code, subtitle_mode)
+    default_split = get_split_pattern(lang_enum, subtitle_mode)
 
     # Check conditions
     if not use_spacy_segmentation:

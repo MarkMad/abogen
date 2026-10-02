@@ -45,6 +45,8 @@ class TestBookParser(unittest.TestCase):
         page2 = doc.new_page()
         page2.insert_text((50, 50), "Page 2 content")
 
+        doc.set_metadata({"title": "PDF Book", "author": "PDF Author"})
+
         doc.save(self.sample_pdf_path)
         doc.close()
 
@@ -54,6 +56,9 @@ class TestBookParser(unittest.TestCase):
         book.set_title("Sample Book")
         book.set_language("en")
         book.add_author("Test Author")
+        book.add_metadata("DC", "publisher", "Test Publisher")
+        book.add_metadata("DC", "description", "Test Description")
+        book.set_cover("cover.jpg", b"test cover bytes")
 
         c1 = epub.EpubHtml(title="Intro", file_name="intro.xhtml", lang="en")
         c1.content = "<h1>Introduction</h1><p>Welcome to the book.</p>"
@@ -151,6 +156,29 @@ class TestBookParser(unittest.TestCase):
         metadata = parser.get_metadata()
         self.assertEqual(metadata.get("title"), "Sample Book")
         self.assertEqual(metadata.get("author"), "Test Author")
+        self.assertEqual(metadata.get("authors"), ["Test Author"])
+        self.assertEqual(metadata.get("publisher"), "Test Publisher")
+        self.assertEqual(metadata.get("description"), "Test Description")
+        self.assertEqual(metadata.get("cover_image"), b"test cover bytes")
+
+    def test_markdown_title_falls_back_to_heading(self):
+        parser = get_book_parser(self.sample_md_path)
+        parser.process_content()
+        self.assertEqual(parser.get_metadata()["title"], "Chapter 1")
+
+    def test_pdf_metadata_extraction(self):
+        with get_book_parser(self.sample_pdf_path) as parser:
+            parser.process_content()
+            self.assertEqual(parser.get_metadata()["title"], "PDF Book")
+            self.assertEqual(parser.get_metadata()["authors"], ["PDF Author"])
+
+    def test_markdown_metadata_extraction(self):
+        with open(self.sample_md_path, "w", encoding="utf-8") as stream:
+            stream.write("---\ntitle: Markdown Book\nauthor: Markdown Author\n---\n# Intro\nText")
+        parser = get_book_parser(self.sample_md_path)
+        parser.process_content()
+        self.assertEqual(parser.get_metadata()["title"], "Markdown Book")
+        self.assertEqual(parser.get_metadata()["authors"], ["Markdown Author"])
 
     def test_ordered_list_handling(self):
         """Test <ol> handling in EpubParser."""

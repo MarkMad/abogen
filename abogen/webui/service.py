@@ -133,6 +133,7 @@ class Job:
     paused: bool = False
     resume_token: Optional[str] = None
     pause_event: threading.Event = field(default_factory=_create_set_event, repr=False, compare=False)
+    control_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
     cover_image_path: Optional[Path] = None
     cover_image_mime: Optional[str] = None
     chunk_level: str = "paragraph"
@@ -324,6 +325,7 @@ class ConversionService:
     ) -> None:
         self._jobs: Dict[str, Job] = {}
         self._queue: List[str] = []
+        self._active_jobs: set[str] = set()
         self._lock = threading.RLock()
         self._worker_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -474,72 +476,78 @@ class ConversionService:
             job = self._jobs.get(job_id)
             if job is None:
                 return False
-            if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
-                return False
-            job.cancel_requested = True
-            job.pause_requested = False
-            job.paused = False
-            job.add_log("Cancellation requested", level="warning")
-            job.pause_event.set()
-            if job.status == JobStatus.PENDING:
-                job.status = JobStatus.CANCELLED
-                self._queue.remove(job_id)
-                job.finished_at = time.time()
-                self._update_queue_positions_locked()
-            self._persist_state()
-            return True
+            with job.control_lock:
+                if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                    return False
+                job.cancel_requested = True
+                job.pause_requested = False
+                job.paused = False
+                job.add_log("Cancellation requested", level="warning")
+                job.pause_event.set()
+                if job_id not in self._active_jobs:
+                    job.status = JobStatus.CANCELLED
+                    if job_id in self._queue:
+                        self._queue.remove(job_id)
+                    job.finished_at = time.time()
+                    job.queue_position = None
+                    self._update_queue_positions_locked()
+                self._persist_state()
+                return True
 
     def pause(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return False
-            if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
-                return False
-            if job.pause_requested or job.paused:
-                return True
+            with job.control_lock:
+                if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                    return False
+                if job.pause_requested or job.paused:
+                    return True
 
-            job.pause_requested = True
-            job.add_log("Pause requested; finishing current chunk before stopping.", level="warning")
-
-            if job.status == JobStatus.PENDING:
-                if job_id in self._queue:
-                    self._queue.remove(job_id)
-                    self._update_queue_positions_locked()
-                job.status = JobStatus.PAUSED
-                job.paused = True
+                job.pause_requested = True
                 job.pause_event.clear()
-            self._persist_state()
-            return True
+                job.add_log("Pause requested; finishing current chunk before stopping.", level="warning")
+
+                if job.status == JobStatus.PENDING and job_id not in self._active_jobs:
+                    if job_id in self._queue:
+                        self._queue.remove(job_id)
+                        self._update_queue_positions_locked()
+                    job.status = JobStatus.PAUSED
+                    job.paused = True
+                    job.pause_event.clear()
+                self._persist_state()
+                return True
 
     def resume(self, job_id: str) -> bool:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return False
-            if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
-                return False
+            with job.control_lock:
+                if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                    return False
 
-            job.pause_requested = False
+                job.pause_requested = False
 
-            if job.status == JobStatus.PAUSED and job.started_at is None:
-                job.status = JobStatus.PENDING
-                job.paused = False
-                job.pause_event.set()
-                if job_id not in self._queue:
-                    self._queue.insert(0, job_id)
-                self._update_queue_positions_locked()
-                self._wake_event.set()
-                job.add_log("Resume requested; returning job to queue.", level="info")
-            else:
-                job.paused = False
-                job.pause_event.set()
-                if job.status == JobStatus.PAUSED:
-                    job.status = JobStatus.RUNNING
-                job.add_log("Resume requested", level="info")
+                if job.status == JobStatus.PAUSED and job_id not in self._active_jobs:
+                    job.status = JobStatus.PENDING
+                    job.paused = False
+                    job.pause_event.set()
+                    if job_id not in self._queue:
+                        self._queue.insert(0, job_id)
+                    self._update_queue_positions_locked()
+                    self._wake_event.set()
+                    job.add_log("Resume requested; returning job to queue.", level="info")
+                else:
+                    job.paused = False
+                    job.pause_event.set()
+                    if job.status == JobStatus.PAUSED:
+                        job.status = JobStatus.RUNNING
+                    job.add_log("Resume requested", level="info")
 
-            self._persist_state()
-            return True
+                self._persist_state()
+                return True
 
     def retry(self, job_id: str) -> Optional[Job]:
         with self._lock:
@@ -570,6 +578,8 @@ class ConversionService:
                 language=job.language,
                 voice=job.voice,
                 speed=job.speed,
+                tts_provider=job.tts_provider,
+                supertonic_total_steps=job.supertonic_total_steps,
                 use_gpu=job.use_gpu,
                 subtitle_mode=job.subtitle_mode,
                 output_format=job.output_format,
@@ -591,6 +601,7 @@ class ConversionService:
                 cover_image_mime=job.cover_image_mime,
                 chapter_intro_delay=job.chapter_intro_delay,
                 read_title_intro=job.read_title_intro,
+                read_closing_outro=job.read_closing_outro,
                 auto_prefix_chapter_titles=job.auto_prefix_chapter_titles,
                 normalize_chapter_opening_caps=job.normalize_chapter_opening_caps,
                 chunk_level=job.chunk_level,
@@ -604,6 +615,7 @@ class ConversionService:
                 entity_summary=job.entity_summary,
                 manual_overrides=job.manual_overrides,
                 pronunciation_overrides=job.pronunciation_overrides,
+                heteronym_overrides=job.heteronym_overrides,
                 normalization_overrides=job.normalization_overrides,
             )
 
@@ -619,7 +631,7 @@ class ConversionService:
             job = self._jobs.get(job_id)
             if job is None:
                 return False
-            if job.status in {JobStatus.RUNNING}:
+            if job_id in self._active_jobs or job.status == JobStatus.RUNNING:
                 return False
             self._jobs.pop(job_id)
             if job_id in self._queue:
@@ -689,6 +701,7 @@ class ConversionService:
                     self._queue.pop(0)
                 if self._queue:
                     job = self._jobs[self._queue.pop(0)]
+                    self._active_jobs.add(job.id)
                 else:
                     self._update_queue_positions_locked()
             if job is None:
@@ -698,15 +711,17 @@ class ConversionService:
                 job.add_log("Job cancelled before start", level="warning")
                 job.status = JobStatus.CANCELLED
                 job.finished_at = time.time()
+                with self._lock:
+                    self._active_jobs.discard(job.id)
+                    self._update_queue_positions_locked()
                 continue
             self._run_job(job)
 
     def _run_job(self, job: Job) -> None:
-        job.pause_event.set()
-        job.pause_requested = False
-        job.paused = False
-        job.status = JobStatus.RUNNING
-        job.started_at = time.time()
+        with self._lock:
+            self._active_jobs.add(job.id)
+            job.status = JobStatus.RUNNING
+            job.started_at = time.time()
         job.add_log("Job started", level="info")
         self._persist_state()
         try:
@@ -735,6 +750,7 @@ class ConversionService:
             job.pause_event.set()
             self._persist_state()
             with self._lock:
+                self._active_jobs.discard(job.id)
                 self._update_queue_positions_locked()
 
     def _update_queue_positions_locked(self) -> None:
@@ -805,6 +821,7 @@ class ConversionService:
             "cover_image_mime": job.cover_image_mime,
             "chapter_intro_delay": job.chapter_intro_delay,
             "read_title_intro": job.read_title_intro,
+            "read_closing_outro": job.read_closing_outro,
             "auto_prefix_chapter_titles": job.auto_prefix_chapter_titles,
             "normalize_chapter_opening_caps": job.normalize_chapter_opening_caps,
             "chunk_level": job.chunk_level,
@@ -911,6 +928,7 @@ class ConversionService:
             max_subtitle_words=int(payload.get("max_subtitle_words", 50)),
             chapter_intro_delay=float(payload.get("chapter_intro_delay", 0.5)),
             read_title_intro=bool(payload.get("read_title_intro", False)),
+            read_closing_outro=bool(payload.get("read_closing_outro", True)),
             auto_prefix_chapter_titles=bool(payload.get("auto_prefix_chapter_titles", True)),
             normalize_chapter_opening_caps=bool(payload.get("normalize_chapter_opening_caps", True)),
         )

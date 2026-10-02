@@ -12,16 +12,19 @@ PUNCTUATION_SENTENCE_COMMA = r".!?…,？。！？،，、।"
 PUNCTUATION_COMMAS = ",，、"
 
 
-def get_split_pattern(language: Language, subtitle_mode: str) -> str:
+def get_split_pattern(language: Language | str, subtitle_mode: str) -> str:
     """Get the appropriate split pattern based on language and subtitle mode.
 
     Args:
-        language: Language enum value, ISO code, or kokoro letter code.
+        language: Language enum value or ISO code.
         subtitle_mode: Subtitle mode ("Sentence", "Sentence + Comma", "Line", etc.)
 
     Returns:
         Split pattern string
     """
+    if not isinstance(language, Language):
+        language = Language.from_str(language)
+
     try:
         mode = SubtitleMode.from_str(subtitle_mode) if not isinstance(subtitle_mode, SubtitleMode) else subtitle_mode
     except ValueError:

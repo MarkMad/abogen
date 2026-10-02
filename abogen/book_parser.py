@@ -14,6 +14,11 @@ import markdown
 from abogen.utils import detect_encoding
 from abogen.subtitle_utils import clean_text
 from abogen.domain.text_utils import calculate_text_length
+from abogen.domain.metadata_extraction import (
+    extract_book_metadata_epub,
+    extract_book_metadata_pdf,
+    extract_book_metadata_markdown,
+)
 
 # Pre-compile frequently used regex patterns
 _BRACKETED_NUMBERS_PATTERN = re.compile(r"\[\s*\d+\s*\]")
@@ -129,13 +134,13 @@ class PdfParser(BaseBookParser):
             self.pdf_doc = None
 
     def _extract_book_metadata(self):
-        # PDF metadata extraction can be added here if needed
-        # For now, base class metadata is empty dict
-        pass
+        return extract_book_metadata_pdf(self.pdf_doc)
 
     def process_content(self, replace_single_newlines=True):
         if not self.pdf_doc:
             self.load()
+
+        self.book_metadata = self._extract_book_metadata()
 
         # 1. Extract text from all pages first
         for page_num in range(len(self.pdf_doc)):
@@ -285,6 +290,7 @@ class PdfParser(BaseBookParser):
 class MarkdownParser(BaseBookParser):
     def __init__(self, book_path):
         self.markdown_text = None
+        self.markdown_toc = []
         super().__init__(book_path)
 
     @property
@@ -305,6 +311,9 @@ class MarkdownParser(BaseBookParser):
             self.load()
 
         self._process_markdown_content()
+        self.book_metadata = extract_book_metadata_markdown(
+            self.markdown_text, self.markdown_toc
+        )
         return self.content_texts, self.content_lengths
 
     def _convert_markdown_toc_to_nav(self, toc_tokens):
@@ -329,6 +338,7 @@ class MarkdownParser(BaseBookParser):
         md = markdown.Markdown(extensions=["toc", "fenced_code"])
         html = md.convert(original_text)
         markdown_toc = md.toc_tokens
+        self.markdown_toc = markdown_toc
 
         # Convert markdown TOC tokens to our unified navigation structure
         self.processed_nav_structure = self._convert_markdown_toc_to_nav(markdown_toc)
@@ -453,19 +463,14 @@ class EpubParser(BaseBookParser):
         return self.content_texts, self.content_lengths
 
     def _extract_book_metadata(self):
-        metadata = {}
         if not self.book:
-            return metadata
+            return {}
 
-        try:
-            metadata["title"] = self.book.get_metadata("DC", "title")[0][0]
-        except Exception:
+        metadata = extract_book_metadata_epub(self.book)
+        if not metadata.get("title"):
             metadata["title"] = os.path.splitext(os.path.basename(self.book_path))[0]
-
-        try:
-            metadata["author"] = self.book.get_metadata("DC", "creator")[0][0]
-        except Exception:
-            metadata["author"] = "Unknown Author"
+        # Retain the legacy singular field for existing parser consumers.
+        metadata["author"] = (metadata.get("authors") or ["Unknown Author"])[0]
 
         try:
             metadata["language"] = self.book.get_metadata("DC", "language")[0][0]

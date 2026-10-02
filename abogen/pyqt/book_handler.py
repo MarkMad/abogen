@@ -1,6 +1,5 @@
 import re
 import base64
-from bs4 import BeautifulSoup, NavigableString
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import (
     QDialog,
@@ -25,24 +24,17 @@ from PyQt6.QtCore import (
     QSize,
 )
 from abogen.utils import (
-    detect_encoding,
     get_resource_path,
 )
 from abogen.book_parser import get_book_parser
 from abogen.domain.metadata_extraction import (
-    extract_book_metadata_epub,
-    extract_book_metadata_pdf,
-    extract_book_metadata_markdown,
     format_metadata_tags,
 )
 
 from abogen.subtitle_utils import clean_text
-from abogen.domain.text_utils import calculate_text_length
 
 import os
 import logging
-import urllib.parse
-import textwrap
 
 # Setup logging
 from abogen.utils import setup_console_logging
@@ -73,12 +65,16 @@ class HandlerDialog(QDialog):
         def __init__(self, target_callable):
             super().__init__()
             self._target = target_callable
+            self.error_message = None
 
         def run(self):
             try:
                 self._target()
             except Exception as e:
+                self.error_message = str(e)
                 self.error.emit(str(e))
+            finally:
+                self._target = None
 
     @classmethod
     def clear_content_cache(cls, book_path=None):
@@ -119,6 +115,8 @@ class HandlerDialog(QDialog):
         self.setWindowTitle(f"Select {item_type} - {book_name}")
         self.resize(1200, 900)
         self._block_signals = False  # Flag to prevent recursive signals
+        self._load_finalized = False
+        self._load_error = None
         # Configure window: remove help button and allow resizing
         self.setWindowFlags(
             Qt.WindowType.Window
@@ -277,20 +275,27 @@ class HandlerDialog(QDialog):
         self._loader_thread = HandlerDialog._LoaderThread(self._preprocess_content)
         self._loader_thread.finished.connect(self._on_load_finished)
         self._loader_thread.error.connect(self._on_load_error)
-        # ensure thread instance is deleted when done
-        self._loader_thread.finished.connect(self._loader_thread.deleteLater)
+        # Keep the thread object alive for synchronous callers to inspect.
         self._loader_thread.start()
 
     def _on_load_error(self, err_msg):
+        self._load_error = err_msg
         logging.error(f"Error loading book in background: {err_msg}")
         if getattr(self, "previewEdit", None) is not None:
             self.previewEdit.setPlainText(f"Error loading book: {err_msg}")
         if getattr(self, "splitter", None) is not None:
             self.splitter.setVisible(True)
         self._hide_loading_overlay()
+        self._ok_button.setEnabled(False)
 
     def _on_load_finished(self):
         """Called in the main thread when background loading finished."""
+        if self._load_finalized:
+            return
+        self._load_finalized = True
+        if self._loader_thread.error_message is not None:
+            self._on_load_error(self._loader_thread.error_message)
+            return
         # Build the tree now that content_texts/content_lengths/etc. are ready
         try:
             # Rebuild tree based on file type
@@ -303,9 +308,6 @@ class HandlerDialog(QDialog):
             # Connect signals (after tree exists)
             self.treeWidget.currentItemChanged.connect(self.update_preview)
             self.treeWidget.itemChanged.connect(self.handle_item_check)
-            self.treeWidget.itemChanged.connect(
-                lambda _: self._update_checkbox_states()
-            )
             self.treeWidget.itemDoubleClicked.connect(self.handle_item_double_click)
 
             # Expand and select first item
@@ -320,9 +322,12 @@ class HandlerDialog(QDialog):
             # Update preview for the current selection
             current = self.treeWidget.currentItem()
             self.update_preview(current)
+            self._ok_button.setEnabled(True)
 
         except Exception as e:
-            logging.error(f"Error finalizing book load: {e}")
+            logging.exception("Error finalizing book load")
+            self._on_load_error(str(e))
+            return
         # Show the main UI and hide loading text
         if getattr(self, "splitter", None) is not None:
             self.splitter.setVisible(True)
@@ -375,6 +380,9 @@ class HandlerDialog(QDialog):
             # Handle empty/failure case
             self.content_texts = {}
             self.content_lengths = {}
+            self.processed_nav_structure = []
+            self.book_metadata = {}
+            raise
 
         # Cache the processed content
         cache_data = {
@@ -419,12 +427,6 @@ class HandlerDialog(QDialog):
         if iterator.value():
             has_parents = True
         self.treeWidget.setRootIsDecorated(has_parents)
-
-    def _update_checkbox_states(self):
-        """Update the checkbox states based on the current checked chapters."""
-        for i in range(self.treeWidget.topLevelItemCount()):
-            item = self.treeWidget.topLevelItem(i)
-            self._update_item_checkbox_state(item)
 
     def _build_tree_from_nav(
         self, nav_nodes, parent_item, seen_content_hashes=None
@@ -515,6 +517,8 @@ class HandlerDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             self,
         )
+        self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_button.setEnabled(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
@@ -951,30 +955,17 @@ class HandlerDialog(QDialog):
         html_content += "</body></html>"
         self.previewEdit.setHtml(html_content)
 
-    def _extract_book_metadata(self):
-        if self.parser.file_type == "epub":
-            return extract_book_metadata_epub(self.book)
-        elif self.parser.file_type == "markdown":
-            return extract_book_metadata_markdown(
-                self.markdown_text, self.markdown_toc
-            )
-        else:
-            return extract_book_metadata_pdf(self.pdf_doc)
-
     def get_selected_text(self):
         # If a background loader thread is running, wait for it to finish to
         # preserve compatibility with callers that expect content to be ready
         # when they create a HandlerDialog and immediately request selected text.
-        try:
-            if (
-                hasattr(self, "_loader_thread")
-                and getattr(self, "_loader_thread") is not None
-            ):
-                # Wait for thread to finish (blocks until done)
-                if self._loader_thread.isRunning():
-                    self._loader_thread.wait()
-        except Exception:
-            pass
+        if self._loader_thread.isRunning():
+            self._loader_thread.wait()
+        # finished is queued to the GUI thread; finalize directly if the caller
+        # blocked that thread. The queued callback becomes a no-op afterwards.
+        self._on_load_finished()
+        if self._load_error is not None:
+            raise RuntimeError(f"Error loading book: {self._load_error}")
 
         if self.parser.file_type == "epub":
             return self._get_epub_selected_text()
@@ -1252,5 +1243,3 @@ class HandlerDialog(QDialog):
 
         action.triggered.connect(do_toggle)
         menu.exec(self.treeWidget.mapToGlobal(pos))
-
-

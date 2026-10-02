@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
+from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
 import numpy as np
@@ -163,6 +165,7 @@ class SupertonicPipeline:
         auto_download: bool = True,
         total_steps: int = 5,
         max_chunk_length: int = 300,
+        model_dir: Path | str | None = None,
     ) -> None:
         self.sample_rate = int(sample_rate)
         self.total_steps = int(total_steps)
@@ -184,7 +187,23 @@ class SupertonicPipeline:
                 "Supertonic is not installed. Install it with `pip install supertonic`."
             ) from exc
 
-        self._tts = TTS(auto_download=auto_download)
+        if model_dir is None:
+            model_dir = os.environ.get("SUPERTONIC_CACHE_DIR")
+        if model_dir is None:
+            # Older installations downloaded here before Abogen managed the cache.
+            # Only reuse a complete model set: the backend replaces incomplete
+            # model directories when auto_download is enabled.
+            legacy_dir = Path.home() / ".cache" / "supertonic2"
+            model_files = (
+                "duration_predictor.onnx", "text_encoder.onnx",
+                "vector_estimator.onnx", "vocoder.onnx",
+            )
+            if all((legacy_dir / "onnx" / name).is_file() for name in model_files):
+                model_dir = legacy_dir
+        if model_dir is None:
+            from abogen.utils import get_user_cache_path
+            model_dir = get_user_cache_path("supertonic2")
+        self._tts = TTS(model_dir=model_dir, auto_download=auto_download)
 
     def __call__(
         self,

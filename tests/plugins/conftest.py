@@ -106,7 +106,13 @@ def loaded_plugin(plugin_dir: Path):
             f"Plugin {plugin_dir.name} failed to load: "
             f"{result.error.errors if result.error else 'Unknown error'}"
         )
-    return result
+    if plugin_dir.name == "kokoro":
+        from unittest.mock import MagicMock
+        # Patch the loader on the dynamically imported module itself.
+        with patch.object(result.module, "_load_kpipeline", return_value=MagicMock()):
+            yield result
+        return
+    yield result
 
 
 @pytest.fixture
@@ -146,6 +152,14 @@ def engine_config() -> Any:
     """
     from abogen.tts_plugin.types import EngineConfig
     return EngineConfig(device="cpu")
+
+
+@pytest.fixture(autouse=True)
+def _mock_supertonic_pipeline():
+    """Exercise real plugin lifecycle logic without loading native models."""
+    from unittest.mock import MagicMock
+    with patch("plugins.supertonic.pipeline.SupertonicPipeline", return_value=MagicMock(sample_rate=24000)):
+        yield
 
 
 @pytest.fixture(autouse=True)

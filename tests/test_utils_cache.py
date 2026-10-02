@@ -53,3 +53,23 @@ def test_abogen_temp_dir_configures_hf_cache(monkeypatch, tmp_path):
     assert os.environ["HF_HOME"] == expected_hf
     assert os.environ["HUGGINGFACE_HUB_CACHE"] == expected_hf
     assert os.environ["TRANSFORMERS_CACHE"] == expected_hf
+
+
+def test_missing_home_uses_platform_temp_directory(monkeypatch, tmp_path):
+    import abogen.utils as utils
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(utils.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("ABOGEN_TEMP_DIR", str(tmp_path / "cache"))
+    for key in ("XDG_CACHE_HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "ABOGEN_INTERNAL_CACHE_ROOT"):
+        monkeypatch.delenv(key, raising=False)
+    assert utils.get_user_cache_root() == str(tmp_path / "cache")
+    assert (tmp_path / "abogen-home").is_dir()
+    assert "HOME" not in os.environ
+
+
+def test_internal_cache_honors_app_cache_override(monkeypatch, tmp_path):
+    import abogen.utils as utils
+    monkeypatch.setenv("ABOGEN_TEMP_DIR", str(tmp_path / "cache"))
+    for key in ("ABOGEN_INTERNAL_CACHE_ROOT", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(key, raising=False)
+    assert utils.get_internal_cache_root() == str(tmp_path / "cache")

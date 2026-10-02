@@ -160,7 +160,7 @@ def main() -> None:
     flask_cli.show_server_banner = _show_server_banner
 
     app = create_app()
-    host = os.environ.get("ABOGEN_HOST", "0.0.0.0")
+    host = os.environ.get("ABOGEN_HOST", "127.0.0.1")
     port = int(os.environ.get("ABOGEN_PORT", "8808"))
     debug = os.environ.get("ABOGEN_DEBUG", "false").lower() == "true"
     app.run(host=host, port=port, debug=debug)

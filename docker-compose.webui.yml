@@ -20,7 +20,7 @@ services:
     image: abogen-webui:latest
     user: "${ABOGEN_UID:-1000}:${ABOGEN_GID:-1000}"
     ports:
-      - "${ABOGEN_PORT:-8808}:8808"
+      - "${ABOGEN_BIND_ADDRESS:-127.0.0.1}:${ABOGEN_PORT:-8808}:8808"
     volumes:
       - ${ABOGEN_DATA:-./data}:/data
       - ${ABOGEN_SETTINGS_DIR:-./config}:/config

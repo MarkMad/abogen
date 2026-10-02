@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -114,18 +115,50 @@ def open_audio_sink(
         if extra_ffmpeg_args:
             cmd[2:2] = extra_ffmpeg_args
 
-    process = subprocess.Popen(
-        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    # A file keeps diagnostics without risking a full stderr pipe blocking FFmpeg.
+    diagnostics = tempfile.TemporaryFile()
+    try:
+        process = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=diagnostics
+        )
+    except BaseException:
+        diagnostics.close()
+        raise
+    closed = False
 
     def _write_compressed(data: np.ndarray) -> None:
         if (cancel_check and cancel_check()) or process.stdin is None or process.stdin.closed:
             return
-        process.stdin.write(data.tobytes())
+        try:
+            process.stdin.write(data.tobytes())
+        except BrokenPipeError:
+            _close_compressed()
+            raise
 
     def _close_compressed() -> None:
-        if process.stdin and not process.stdin.closed:
-            process.stdin.close()
-        process.wait()
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        pipe_error = None
+        try:
+            if process.stdin and not process.stdin.closed:
+                try:
+                    process.stdin.close()
+                except BrokenPipeError as exc:
+                    pipe_error = exc
+            returncode = process.wait()
+            if returncode != 0:
+                diagnostics.seek(0, os.SEEK_END)
+                diagnostics.seek(max(0, diagnostics.tell() - 16384))
+                detail = diagnostics.read().decode("utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    f"FFmpeg encoding failed for {path} (exit code {returncode}): "
+                    f"{detail or 'No error output was produced'}"
+                ) from pipe_error
+            if pipe_error is not None:
+                raise pipe_error
+        finally:
+            diagnostics.close()
 
     return AudioSink(write=_write_compressed, close=_close_compressed)

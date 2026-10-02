@@ -5,8 +5,38 @@ import soundfile as sf
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 import subprocess
+import sys
+import pytest
 
 from abogen.domain.audio_sink import AudioSink, open_audio_sink, _ensure_ffmpeg
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_encoder_exit_status_and_large_diagnostics(monkeypatch, tmp_path, returncode):
+    monkeypatch.setattr("abogen.domain.audio_sink._ensure_ffmpeg", lambda: None)
+    command = [sys.executable, "-c", (
+        "import sys; sys.stderr.write('x' * 100000 + '\\nEncoder diagnostic'); "
+        f"sys.stdin.buffer.read(); sys.exit({returncode})"
+    )]
+    sink = open_audio_sink(tmp_path / "out.mp3", "mp3", ffmpeg_cmd=command)
+    sink.write(np.zeros(32, dtype="float32"))
+    if returncode:
+        with pytest.raises(RuntimeError, match="(?s)exit code 1.*Encoder diagnostic") as error:
+            sink.close()
+        assert len(str(error.value)) < 17000
+    else:
+        sink.close()
+    sink.close()  # Closing an already reaped encoder is safe.
+
+
+def test_encoder_broken_pipe_retains_diagnostics(monkeypatch, tmp_path):
+    monkeypatch.setattr("abogen.domain.audio_sink._ensure_ffmpeg", lambda: None)
+    sink = open_audio_sink(tmp_path / "out.mp3", "mp3", ffmpeg_cmd=[
+        sys.executable, "-c", "import sys; sys.stderr.write('Invalid encoder'); sys.exit(1)"
+    ])
+    with pytest.raises(RuntimeError, match="Invalid encoder"):
+        with sink:
+            sink.write(np.zeros(1000000, dtype="float32"))
 
 
 class TestAudioSinkDataclass:

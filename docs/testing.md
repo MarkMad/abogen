@@ -1,5 +1,16 @@
 # Testing Guide
 
+Tests isolate app settings, caches, uploads, and outputs in pytest temporary
+directories. Generic plugin contract tests use a fake Supertonic pipeline so
+they do not download models or load ONNX Runtime.
+
+Real Supertonic engine initialization is opt-in: set `ABOGEN_TEST_REAL_TTS=1`
+and run `python -m pytest tests/test_supertonic_plugin.py -q` in a separate
+process with the backend and models available. Its import check runs in a
+subprocess to protect test collection from native-library crashes.
+These opt-in tests preserve `SUPERTONIC_CACHE_DIR`; when unset, existing models
+in `~/.cache/supertonic2` are reused if present.
+
 This document describes the testing strategy for Abogen's Plugin Architecture.
 
 ## Test Categories

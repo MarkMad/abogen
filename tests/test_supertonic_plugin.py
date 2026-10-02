@@ -11,6 +11,9 @@ These tests verify that the SuperTonic plugin:
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +39,17 @@ from tests.contracts.engine_contract import EngineContractMixin
 # ──────────────────────────────────────────────────────────────
 
 def _supertonic_available() -> bool:
+    # Native model integration is opt-in; importing the backend at collection
+    # time can crash pytest before it has a chance to report a failure.
+    if os.environ.get("ABOGEN_TEST_REAL_TTS") != "1":
+        return False
     try:
-        from supertonic import TTS  # type: ignore[import-not-found]
-        return True
-    except ImportError:
+        result = subprocess.run(
+            [sys.executable, "-c", "from supertonic import TTS"],
+            capture_output=True, timeout=30,
+        )
+        return result.returncode == 0
+    except Exception:
         return False
 
 
@@ -160,7 +170,7 @@ class TestSuperTonicPluginLoading:
 
 class TestSuperTonicEngineCreation:
 
-    @pytest.mark.skipif(not _supertonic_available(), reason="SuperTonic not installed")
+    @pytest.mark.skipif(not _supertonic_available(), reason="Set ABOGEN_TEST_REAL_TTS=1 with a working SuperTonic runtime")
     def test_create_engine(self, supertonic_plugin_dir: Path, host_context: HostContext) -> None:
         result = load_plugin_from_dir(supertonic_plugin_dir)
         assert result.success is True
@@ -168,7 +178,7 @@ class TestSuperTonicEngineCreation:
         assert isinstance(engine, Engine)
         engine.dispose()
 
-    @pytest.mark.skipif(not _supertonic_available(), reason="SuperTonic not installed")
+    @pytest.mark.skipif(not _supertonic_available(), reason="Set ABOGEN_TEST_REAL_TTS=1 with a working SuperTonic runtime")
     def test_engine_satisfies_protocol(self, supertonic_plugin_dir: Path, host_context: HostContext) -> None:
         result = load_plugin_from_dir(supertonic_plugin_dir)
         assert result.success is True

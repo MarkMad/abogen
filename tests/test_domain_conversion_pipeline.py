@@ -186,6 +186,18 @@ class TestTtsSegments:
 class TestSpacyPreTtsSegmentation:
     """Tests for spacy_pre_tts_segmentation()."""
 
+    @pytest.mark.parametrize("code", ["es", "fr", "ja", "en-US"])
+    def test_string_language_codes(self, code):
+        from abogen.domain.conversion_pipeline import spacy_pre_tts_segmentation
+        from abogen.domain.enums import Language
+        from abogen.domain.split_pattern import get_split_pattern
+
+        segments, split = spacy_pre_tts_segmentation(
+            "Hello world", code, "Sentence", use_spacy_segmentation=False
+        )
+        assert segments == ["Hello world"]
+        assert split == get_split_pattern(Language.from_str(code), "Sentence")
+
     def test_disabled_when_use_spacy_false(self):
         from abogen.domain.conversion_pipeline import spacy_pre_tts_segmentation
         from abogen.domain.enums import Language

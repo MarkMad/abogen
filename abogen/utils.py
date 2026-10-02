@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import warnings
 from contextlib import contextmanager
@@ -309,8 +310,7 @@ def get_user_cache_root():
 
         home_dir = os.environ.get("HOME")
         if not home_dir:
-            home_dir = ensure_directory(os.path.join("/tmp", "abogen-home"))
-            os.environ["HOME"] = home_dir
+            home_dir = ensure_directory(os.path.join(tempfile.gettempdir(), "abogen-home"))
         else:
             home_dir = ensure_directory(home_dir)
 
@@ -358,14 +358,14 @@ def get_user_cache_root():
             default_cache,
             os.path.join(data_root, "cache") if data_root else None,
             "/data/cache",
-            "/tmp/abogen-cache",
+            os.path.join(tempfile.gettempdir(), "abogen-cache"),
         ]
 
         try:
             cache_root = _try_paths(*fallback_paths)
         except OSError:
             # Final safety net – attempt a tmp directory unique to this process.
-            tmp_candidate = os.path.join("/tmp", f"abogen-cache-{os.getpid()}")
+            tmp_candidate = os.path.join(tempfile.gettempdir(), f"abogen-cache-{os.getpid()}")
             logger.warning("Falling back to temp cache directory %s", tmp_candidate)
             cache_root = ensure_directory(tmp_candidate)
 
@@ -382,9 +382,7 @@ def get_internal_cache_root():
     )
     if root:
         return ensure_directory(root)
-    home_dir = os.environ.get("HOME") or os.path.join("/tmp", "abogen-home")
-    home_dir = ensure_directory(home_dir)
-    return ensure_directory(os.path.join(home_dir, ".cache"))
+    return get_user_cache_root()
 
 
 def get_internal_cache_path(folder=None):
@@ -500,29 +498,33 @@ def create_process(cmd, stdin=None, text=True, capture_output=False):
     if proc.stdout and not capture_output:
 
         def _stream_output(stream):
+            output_stream = sys.stdout
             if text:
                 # For text mode, read character by character for real-time output
                 while True:
                     char = stream.read(1)
                     if not char:
                         break
-                    # Direct write to stdout for immediate feedback
-                    sys.stdout.write(char)
-                    sys.stdout.flush()
+                    if output_stream is not None:
+                        try:
+                            output_stream.write(char)
+                            output_stream.flush()
+                        except Exception:
+                            output_stream = None
             else:
                 # For binary mode, read small chunks
                 while True:
                     chunk = stream.read(1)  # Read byte by byte for real-time output
                     if not chunk:
                         break
-                    try:
-                        # Try to decode binary data for display
-                        sys.stdout.write(
-                            chunk.decode(default_encoding, errors="replace")
-                        )
-                        sys.stdout.flush()
-                    except Exception:
-                        pass
+                    if output_stream is not None:
+                        try:
+                            output_stream.write(
+                                chunk.decode(default_encoding, errors="replace")
+                            )
+                            output_stream.flush()
+                        except Exception:
+                            output_stream = None
             stream.close()
 
         # Start a daemon thread to handle output streaming

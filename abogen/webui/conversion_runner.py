@@ -176,8 +176,23 @@ class WebUIEventsAdapter:
         self._job.etr_str = etr
 
     def check_cancelled(self) -> None:
-        if self._job.cancel_requested:
-            raise ConversionCancelled("Job cancelled")
+        job = self._job
+        while True:
+            with job.control_lock:
+                if job.cancel_requested:
+                    raise ConversionCancelled("Job cancelled")
+                if not job.pause_requested:
+                    if job.paused:
+                        job.paused = False
+                        job.status = JobStatus.RUNNING
+                    return
+                if not job.paused:
+                    job.paused = True
+                    job.status = JobStatus.PAUSED
+                    job.add_log("Job paused at conversion boundary", level="info")
+            # Resume and cancellation both wake this wait. Never hold the lock
+            # while waiting, so requests can change state atomically.
+            job.pause_event.wait(timeout=0.1)
 
 
 # ---------------------------------------------------------------------------
