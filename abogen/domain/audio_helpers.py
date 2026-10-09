@@ -15,7 +15,12 @@ import numpy as np
 SAMPLE_RATE = 24000
 
 
-def build_ffmpeg_command(path: Path, fmt: str, metadata: Optional[Dict[str, str]] = None) -> list[str]:
+def build_ffmpeg_command(
+    path: Path,
+    fmt: str,
+    metadata: Optional[Dict[str, str]] = None,
+    input_paths: Optional[List[str]] = None,
+) -> list[str]:
     from abogen.infrastructure.exporters import ExportService
 
     base = [
@@ -30,6 +35,8 @@ def build_ffmpeg_command(path: Path, fmt: str, metadata: Optional[Dict[str, str]
         "-i",
         "pipe:0",
     ]
+    for input_path in input_paths or []:
+        base += ["-i", str(input_path)]
     if fmt == "mp3":
         base += ["-c:a", "libmp3lame", "-qscale:a", "2"]
     elif fmt == "opus":

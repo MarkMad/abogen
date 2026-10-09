@@ -49,6 +49,22 @@ class TestBuildFfmpegCommand:
         assert "-q:a" in cmd
         assert "+faststart+use_metadata_tags" in cmd
 
+    def test_extra_input_precedes_output_options(self):
+        from abogen.domain.audio_helpers import build_ffmpeg_command
+
+        cover_path = "C:/covers/cover.jpg"
+        cmd = build_ffmpeg_command(
+            Path("/out.m4b"),
+            "m4b",
+            input_paths=[cover_path],
+        )
+
+        assert cmd.index("-i", cmd.index("pipe:0")) < cmd.index("-q:a")
+        assert cmd[cmd.index(cover_path) - 1 : cmd.index(cover_path) + 1] == [
+            "-i",
+            cover_path,
+        ]
+
     def test_wav_copy_codec(self):
         from abogen.domain.audio_helpers import build_ffmpeg_command
 
