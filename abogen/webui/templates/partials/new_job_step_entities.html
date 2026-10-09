@@ -30,24 +30,6 @@
     {% if pending.generate_epub3 %}
       <input type="hidden" name="generate_epub3" value="true">
     {% endif %}
-    {% for chapter in pending.chapters %}
-      {% set idx = loop.index0 %}
-      {% set is_enabled = chapter.enabled is not defined or chapter.enabled %}
-      {% set selected_option = '__default' %}
-      {% if chapter.voice_profile %}
-        {% set selected_option = 'profile:' ~ chapter.voice_profile %}
-      {% elif chapter.voice %}
-        {% set selected_option = 'voice:' ~ chapter.voice %}
-      {% elif chapter.voice_formula %}
-        {% set selected_option = 'formula' %}
-      {% endif %}
-      {% if is_enabled %}
-        <input type="hidden" name="chapter-{{ idx }}-enabled" value="on">
-      {% endif %}
-      <input type="hidden" name="chapter-{{ idx }}-title" value="{{ chapter.title }}">
-      <input type="hidden" name="chapter-{{ idx }}-voice" value="{{ selected_option }}">
-      <input type="hidden" name="chapter-{{ idx }}-formula" value="{{ chapter.voice_formula or '' }}">
-    {% endfor %}
   </div>
 
   <div class="modal__body wizard-card__body">

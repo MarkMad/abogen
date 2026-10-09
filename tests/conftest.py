@@ -33,7 +33,7 @@ def _isolate_settings_dir(tmp_path_factory: pytest.TempPathFactory):
         "ABOGEN_OUTPUT_ROOT": "outputs",
         "ABOGEN_UPLOAD_ROOT": "uploads",
         "ABOGEN_VOICE_CACHE_DIR": "voices",
-        "SUPERTONIC_CACHE_DIR": "supertonic",
+        "SUPERTONIC_CACHE_DIR": "supertonic3",
     }.items():
         if name == "SUPERTONIC_CACHE_DIR" and os.environ.get("ABOGEN_TEST_REAL_TTS") == "1":
             # Opt-in integration tests must be able to reuse installed models.

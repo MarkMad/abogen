@@ -78,7 +78,7 @@ def _coerce_supertonic_steps(value: Any) -> int:
     try:
         steps = int(value)
     except (TypeError, ValueError):
-        return 5
+        return 8
     return max(2, min(15, steps))
 
 

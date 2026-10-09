@@ -7,19 +7,24 @@ import pytest
 from plugins.supertonic import pipeline
 
 
-@pytest.mark.parametrize("source", ["explicit", "environment", "legacy", "app", "partial"])
+@pytest.mark.parametrize("source", ["explicit", "environment", "legacy-v2", "app"])
 def test_pipeline_model_directory_precedence(monkeypatch, tmp_path, source):
     tts = Mock()
     monkeypatch.setitem(sys.modules, "supertonic", SimpleNamespace(TTS=tts))
-    monkeypatch.setattr(pipeline, "_configure_supertonic_gpu", lambda: None)
+    monkeypatch.setattr(pipeline, "_configure_supertonic_gpu", lambda device: None)
     app_cache = Mock(return_value=str(tmp_path / "app"))
     monkeypatch.setattr("abogen.utils.get_user_cache_path", app_cache)
     monkeypatch.delenv("SUPERTONIC_CACHE_DIR", raising=False)
     monkeypatch.setattr(pipeline.Path, "home", lambda: tmp_path)
-    legacy_dir = tmp_path / ".cache" / "supertonic2"
-    (legacy_dir / "onnx").mkdir(parents=True)
-    for name in ("duration_predictor.onnx", "text_encoder.onnx", "vector_estimator.onnx", "vocoder.onnx"):
-        if source != "app" and not (source == "partial" and name == "vocoder.onnx"):
+    if source == "legacy-v2":
+        legacy_dir = tmp_path / ".cache" / "supertonic2"
+        (legacy_dir / "onnx").mkdir(parents=True)
+        for name in (
+            "duration_predictor.onnx",
+            "text_encoder.onnx",
+            "vector_estimator.onnx",
+            "vocoder.onnx",
+        ):
             (legacy_dir / "onnx" / name).touch()
     model_dir = None
     if source in ("explicit", "environment"):
@@ -28,11 +33,17 @@ def test_pipeline_model_directory_precedence(monkeypatch, tmp_path, source):
         model_dir = tmp_path / "explicit"
     pipeline.SupertonicPipeline(sample_rate=24000, model_dir=model_dir, auto_download=False)
     expected = model_dir if source == "explicit" else (
-        legacy_dir if source == "legacy" else str(tmp_path / ("app" if source == "partial" else source))
+        str(tmp_path / "app")
+        if source in ("app", "legacy-v2")
+        else str(tmp_path / "environment")
     )
-    tts.assert_called_once_with(model_dir=expected, auto_download=False)
-    if source in ("app", "partial"):
-        app_cache.assert_called_once_with("supertonic2")
+    tts.assert_called_once_with(
+        model="supertonic-3",
+        model_dir=expected,
+        auto_download=False,
+    )
+    if source in ("app", "legacy-v2"):
+        app_cache.assert_called_once_with("supertonic3")
     else:
         app_cache.assert_not_called()
 
@@ -54,7 +65,7 @@ def test_test_isolation_preserves_real_model_cache(monkeypatch, tmp_path, real_t
     fixture = _isolate_settings_dir.__wrapped__(SimpleNamespace(mktemp=lambda _: test_root))
     next(fixture)
     try:
-        expected = (original if configured else None) if real_tts else str(test_root / "supertonic")
+        expected = (original if configured else None) if real_tts else str(test_root / "supertonic3")
         assert os.environ.get("SUPERTONIC_CACHE_DIR") == expected
     finally:
         fixture.close()
@@ -67,5 +78,9 @@ def test_engine_passes_resolved_model_path(monkeypatch, tmp_path):
     loader = Mock()
     monkeypatch.setattr(plugin, "_load_supertonic_pipeline", loader)
     engine = plugin.create_engine(Mock(), tmp_path / "models", config)
-    loader.assert_called_once_with(language=config.language, model_path=tmp_path / "models")
+    loader.assert_called_once_with(
+        language=config.language,
+        model_path=tmp_path / "models",
+        device=config.device,
+    )
     engine.dispose()

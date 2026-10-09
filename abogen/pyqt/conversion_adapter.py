@@ -91,7 +91,7 @@ def build_conversion_request_from_thread(thread: Any) -> ConversionRequest:
         voice_profile=getattr(thread, "voice_profile", None),
         speed=thread.speed,
         use_gpu=thread.use_gpu,
-        supertonic_total_steps=getattr(thread, "supertonic_total_steps", 5),
+        supertonic_total_steps=getattr(thread, "supertonic_total_steps", 8),
         # Output Format
         output_format=thread.output_format,
         subtitle_mode=thread.subtitle_mode,
@@ -194,7 +194,7 @@ class PyQtVoiceResolver:
             resolved_spec=voice_spec,
             voice=loaded_voice,
             speed=self._thread.speed,
-            supertonic_steps=getattr(self._thread, "supertonic_total_steps", 5),
+            supertonic_steps=getattr(self._thread, "supertonic_total_steps", 8),
         )
 
 

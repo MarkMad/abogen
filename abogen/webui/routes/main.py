@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, cast
 
 from flask import Blueprint, redirect, render_template, request, url_for, jsonify, current_app
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 from abogen.webui.service import PendingJob, JobStatus
@@ -317,7 +318,7 @@ def wizard_update():
             
         elif current_step == "entities":
             # Just saving entity overrides
-            apply_prepare_form(pending, request.form)
+            apply_prepare_form(pending, request.form, update_chapters=False)
             target_step = next_step or "entities" # Stay or finish
             
         else:
@@ -359,30 +360,86 @@ def wizard_cancel():
 
 @main_bp.route("/wizard/finish", methods=["POST"])
 def wizard_finish():
-    pending_id = request.values.get("pending_id")
-    if not pending_id:
-        if wants_wizard_json():
-            return jsonify({"error": "Missing job ID"}), 400
-        return redirect(url_for("main.index"))
+    pending_id = None
+    pending = None
+    try:
+        pending_id = request.values.get("pending_id")
+        if not pending_id:
+            if wants_wizard_json():
+                return jsonify({"error": "Missing job ID"}), 400
+            return redirect(url_for("main.index"))
 
-    pending = get_service().get_pending_job(pending_id)
-    if not pending:
-        if wants_wizard_json():
-            return jsonify({"error": "Job not found"}), 404
-        return redirect(url_for("main.index"))
+        pending = get_service().get_pending_job(pending_id)
+        if not pending:
+            if wants_wizard_json():
+                return jsonify({"error": "Job not found"}), 404
+            return redirect(url_for("main.index"))
 
-    # Final update from form
-    apply_prepare_form(pending, request.form)
-    
-    # Submit job
-    job_id = submit_job(pending)
-    
-    if wants_wizard_json():
-        return jsonify({
-            "status": "submitted",
-            "job_id": job_id,
-            "redirect_url": url_for("main.index"),
-            "jobs_panel": render_jobs_panel()
-        })
-        
-    return redirect(url_for("main.index"))
+        # Final update from form
+        _, _, _, errors, *_ = apply_prepare_form(
+            pending, request.form, update_chapters=False
+        )
+        if errors:
+            if wants_wizard_json():
+                return jsonify({"error": "\n".join(errors)}), 400
+            return render_template(
+                "index.html",
+                options=template_options(),
+                settings=load_settings(),
+                jobs_panel=render_jobs_panel(),
+                wizard_mode=True,
+                wizard_step="entities",
+                wizard_partial=render_wizard_partial(
+                    pending, "entities", error="\n".join(errors)
+                ),
+            )
+
+        # Submit job
+        job_id = submit_job(pending)
+
+        if wants_wizard_json():
+            return jsonify({
+                "status": "submitted",
+                "job_id": job_id,
+                "redirect_url": url_for("main.index"),
+                "jobs_panel": render_jobs_panel()
+            })
+
+        return redirect(url_for("main.index"))
+    except HTTPException as exc:
+        logger.warning(
+            "HTTP error finishing wizard for pending job %s: %s",
+            pending_id or "unknown",
+            exc,
+        )
+        if wants_wizard_json():
+            return jsonify({"error": exc.description}), exc.code or 500
+        if pending is None:
+            raise
+        return render_template(
+            "index.html",
+            options=template_options(),
+            settings=load_settings(),
+            jobs_panel=render_jobs_panel(),
+            wizard_mode=True,
+            wizard_step="entities",
+            wizard_partial=render_wizard_partial(
+                pending, "entities", error=exc.description
+            ),
+        ), exc.code or 500
+    except Exception as exc:
+        logger.exception("Error finishing wizard for pending job %s", pending_id or "unknown")
+        error_msg = f"Unable to queue conversion: {exc}"
+        if wants_wizard_json():
+            return jsonify({"error": error_msg}), 500
+        return render_template(
+            "index.html",
+            options=template_options(),
+            settings=load_settings(),
+            jobs_panel=render_jobs_panel(),
+            wizard_mode=True,
+            wizard_step="entities",
+            wizard_partial=render_wizard_partial(
+                pending, "entities", error=error_msg
+            ),
+        ), 500

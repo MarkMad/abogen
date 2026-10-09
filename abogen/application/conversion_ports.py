@@ -10,7 +10,7 @@ implementations (PyQt signals, Flask Job, etc.).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 
 class ConversionCancelled(Exception):
@@ -67,7 +67,7 @@ class ResolvedVoice:
     provider: str
     resolved_spec: str
     voice: Any  # loaded voice tensor or name
-    speed: float
+    speed: Optional[float]
     supertonic_steps: int
 
 

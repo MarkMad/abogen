@@ -211,7 +211,7 @@ class TestConversionRequestValidation:
         req = ConversionRequest()
         assert req.subtitle.max_words == 50
         assert req.speed == 1.0
-        assert req.supertonic_total_steps == 5
+        assert req.supertonic_total_steps == 8
         assert req.output_format == OutputFormat.WAV
         assert req.subtitle.mode == SubtitleMode.DISABLED
 

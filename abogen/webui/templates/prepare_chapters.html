@@ -72,6 +72,10 @@
           <div class="form-section__title-row">
             <h3 class="form-section__title">Detected chapters</h3>
             <p class="hint">Toggle chapters on or off, rename them, and override the voice per chapter if needed.</p>
+            <div class="form-section__actions">
+              <button type="button" class="button button--ghost button--small" data-role="chapter-select-all">Select all</button>
+              <button type="button" class="button button--ghost button--small" data-role="chapter-unselect-all">Unselect all</button>
+            </div>
           </div>
           <div class="chapter-grid">
             {% for chapter in pending.chapters %}

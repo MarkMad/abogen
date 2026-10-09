@@ -125,8 +125,9 @@ class FakePipelineProvider:
 class FakeVoiceResolver:
     """Fake voice resolver that returns ResolvedVoice objects."""
 
-    def __init__(self):
+    def __init__(self, speed: Optional[float] = 1.0):
         self.resolved_specs = []
+        self.speed = speed
 
     def resolve(self, voice_spec: str) -> ResolvedVoice:
         self.resolved_specs.append(voice_spec)
@@ -134,10 +135,9 @@ class FakeVoiceResolver:
             provider="kokoro",
             resolved_spec=voice_spec,
             voice=voice_spec,  # Use spec as voice name
-            speed=1.0,
+            speed=self.speed,
             supertonic_steps=5,
         )
-
 
 # ─── Tests ──────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ class TestExecuteConversion:
 
             events = FakeEvents()
             pipeline = FakePipelineProvider()
-            resolver = FakeVoiceResolver()
+            resolver = FakeVoiceResolver(speed=None)
             tts_context = TTSContext()
 
             result = execute_conversion(

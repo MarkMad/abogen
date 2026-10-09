@@ -18,12 +18,15 @@ from abogen.domain.text_utils import calculate_text_length
 def build_chapter_payload(
     chapters: List[Any],
     source_name: str = "",
+    *,
+    preselect: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Build a chapter payload with preselection and character counts.
+    """Build a chapter payload with optional preselection and character counts.
 
     Args:
         chapters: List of chapter-like objects with ``title`` and ``text`` attributes.
         source_name: Fallback title for the placeholder chapter when *chapters* is empty.
+        preselect: Whether to use supplement heuristics to enable chapters by default.
 
     Returns:
         List of chapter dicts ready for ``PendingJob.chapters`` or ``ChapterChunkConfig``.
@@ -34,7 +37,7 @@ def build_chapter_payload(
     for index, chapter in enumerate(chapters):
         title = getattr(chapter, "title", "") or ""
         text = getattr(chapter, "text", "") or ""
-        enabled = should_preselect_chapter(title, text, index, total)
+        enabled = preselect and should_preselect_chapter(title, text, index, total)
         payload.append(
             {
                 "id": f"{index:04d}",
@@ -58,5 +61,6 @@ def build_chapter_payload(
             }
         )
 
-    ensure_at_least_one_chapter_enabled(payload)
+    if preselect:
+        ensure_at_least_one_chapter_enabled(payload)
     return payload

@@ -41,6 +41,14 @@ class TestBuildChapterPayload:
         result = build_chapter_payload(chapters)
         assert all(ch["enabled"] for ch in result)
 
+    def test_preselect_false_leaves_all_chapters_unselected(self):
+        chapters = [
+            FakeChapter("Chapter 1", "The story begins."),
+            FakeChapter("Chapter 2", "The story continues."),
+        ]
+        result = build_chapter_payload(chapters, preselect=False)
+        assert all(not ch["enabled"] for ch in result)
+
     def test_supplement_not_preselected(self):
         chapters = [
             FakeChapter("Chapter 1", "The story begins with a long enough text to pass the threshold."),

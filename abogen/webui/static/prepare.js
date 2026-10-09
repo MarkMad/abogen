@@ -282,6 +282,22 @@ const initPrepare = (root = document) => {
 
   const chapterRows = Array.from(form.querySelectorAll("[data-role=chapter-row]"));
 
+  const setChaptersEnabled = (enabled) => {
+    chapterRows.forEach((row) => {
+      const checkbox = row.querySelector('[data-role="chapter-enabled"]');
+      if (!checkbox || checkbox.checked === enabled) return;
+      checkbox.checked = enabled;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  };
+
+  form.querySelector('[data-role="chapter-select-all"]')?.addEventListener("click", () => {
+    setChaptersEnabled(true);
+  });
+  form.querySelector('[data-role="chapter-unselect-all"]')?.addEventListener("click", () => {
+    setChaptersEnabled(false);
+  });
+
   const setRowExpansion = (row, expanded) => {
     if (!row) return;
     const details = row.querySelector('[data-role="chapter-details"]');

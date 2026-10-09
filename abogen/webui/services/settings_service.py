@@ -38,7 +38,7 @@ def apply_form_to_settings(current: dict, form: Mapping[str, Any]) -> dict:
     current["default_speaker"] = (form.get("default_speaker") or "").strip()
     current["default_voice"] = (form.get("default_voice") or "").strip()
     try:
-        current["supertonic_total_steps"] = max(2, min(15, int(form.get("supertonic_total_steps", current.get("supertonic_total_steps", 5)))))
+        current["supertonic_total_steps"] = max(2, min(15, int(form.get("supertonic_total_steps", current.get("supertonic_total_steps", 8)))))
     except (TypeError, ValueError):
         pass
     try:

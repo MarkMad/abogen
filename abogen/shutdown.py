@@ -132,16 +132,15 @@ def register_shutdown() -> None:
 
 def install_qt_hook() -> None:
     """Connect Qt aboutToQuit to cleanup. Must run AFTER QApplication is created."""
-    try:
-        from PyQt6.QtWidgets import QApplication
+    qt_widgets = sys.modules.get("PyQt6.QtWidgets")
+    if qt_widgets is None:
+        return
 
-        app = QApplication.instance()
-        if app is not None and not getattr(app, "_abogen_cleanup_connected", False):
-            app.aboutToQuit.connect(_run_cleanups)
-            app._abogen_cleanup_connected = True
-            _log.info("Shutdown: Qt aboutToQuit hook connected")
-    except Exception:
-        pass
+    app = qt_widgets.QApplication.instance()
+    if app is not None and not getattr(app, "_abogen_cleanup_connected", False):
+        app.aboutToQuit.connect(_run_cleanups)
+        app._abogen_cleanup_connected = True
+        _log.info("Shutdown: Qt aboutToQuit hook connected")
 
 
 register_shutdown._registered = False
