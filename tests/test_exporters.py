@@ -4,7 +4,51 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from pathlib import Path
+import pytest
 from abogen.infrastructure.exporters import ExportService
+
+
+@pytest.mark.parametrize(
+    ("metadata", "chapters", "expected_cover_input"),
+    [
+        ({"title": "Book"}, [{"start": 0, "end": 1, "title": "Chapter 1"}], "2:v:0"),
+        ({}, [], "1:v:0"),
+    ],
+)
+def test_embed_m4b_metadata_maps_cover_from_correct_input(
+    monkeypatch, tmp_path, metadata, chapters, expected_cover_input
+):
+    audio_path = tmp_path / "book.m4b"
+    audio_path.write_bytes(b"audio")
+    cover_path = tmp_path / "cover.jpg"
+    cover_path.write_bytes(b"cover")
+    commands = []
+
+    class CompletedProcess:
+        def wait(self):
+            return 0
+
+    def fake_create_process(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"updated audio")
+        return CompletedProcess()
+
+    monkeypatch.setattr("abogen.infrastructure.exporters.create_process", fake_create_process)
+
+    ExportService().embed_m4b_metadata(
+        audio_path,
+        metadata,
+        chapters,
+        cover_path=cover_path,
+    )
+
+    command = commands[0]
+    cover_input = command.index(str(cover_path))
+    assert command[cover_input - 1 : cover_input + 1] == ["-i", str(cover_path)]
+    assert any(
+        command[index : index + 2] == ["-map", expected_cover_input]
+        for index in range(cover_input + 1, len(command) - 1)
+    )
 
 
 class TestEscapeFfmetadataValue:

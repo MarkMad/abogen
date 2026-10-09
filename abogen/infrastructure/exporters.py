@@ -146,7 +146,15 @@ class ExportService:
         if cover_path and cover_path.exists():
             cmd.extend(["-i", str(cover_path)])
             cmd.extend(["-map", "0:a"])
-            cmd.extend(["-map", "1:v:0", "-c:v:0", "mjpeg", "-disposition:v:0", "attached_pic"])
+            cover_input_index = 2 if ffmetadata_path else 1
+            cmd.extend([
+                "-map",
+                f"{cover_input_index}:v:0",
+                "-c:v:0",
+                "mjpeg",
+                "-disposition:v:0",
+                "attached_pic",
+            ])
             if cover_mime:
                 cmd.extend(["-metadata:s:v:0", f"mimetype={cover_mime}"])
             cmd.extend(["-metadata:s:v:0", "title=Cover Art"])
