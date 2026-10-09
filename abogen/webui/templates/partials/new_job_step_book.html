@@ -116,14 +116,15 @@
   {% set narrator_profile = '' %}
 {% endif %}
 {% set narrator_voice = None %}
+{% set configured_narrator = settings_dict.get('default_speaker') or settings_dict.get('default_voice', options.voices[0] if options.voices else '') %}
 {% if form_voice %}
   {% set narrator_voice = form_voice %}
 {% elif pending and pending.voice %}
   {% set narrator_voice = pending.voice %}
 {% else %}
-  {% set narrator_voice = settings_dict.get('default_voice', options.voices[0] if options.voices else '') %}
+  {% set narrator_voice = configured_narrator %}
 {% endif %}
-{% if (not narrator_profile) and narrator_voice and narrator_voice[:8]|lower == 'profile:' %}
+{% if (not narrator_profile) and narrator_voice and narrator_voice[:8]|lower in ['profile:', 'speaker:'] %}
   {% set narrator_profile = narrator_voice[8:]|trim %}
   {% set narrator_voice = '' %}
 {% endif %}

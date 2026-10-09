@@ -74,7 +74,10 @@ _WIZARD_STEP_META = {
 
 
 def apply_prepare_form(
-    pending: PendingJob, form: Mapping[str, Any]
+    pending: PendingJob,
+    form: Mapping[str, Any],
+    *,
+    update_chapters: bool = True,
 ) -> tuple[
     ChunkLevel,
     List[Dict[str, Any]],
@@ -250,55 +253,65 @@ def apply_prepare_form(
     overrides: List[Dict[str, Any]] = []
     selected_total = 0
 
-    for index, chapter in enumerate(pending.chapters):
-        enabled = form.get(f"chapter-{index}-enabled") == "on"
-        title_input = (form.get(f"chapter-{index}-title") or "").strip()
-        title = title_input or chapter.get("title") or f"Chapter {index + 1}"
-        voice_selection = form.get(f"chapter-{index}-voice", "__default")
-        formula_input = (form.get(f"chapter-{index}-formula") or "").strip()
+    if update_chapters:
+        for index, chapter in enumerate(pending.chapters):
+            enabled = form.get(f"chapter-{index}-enabled") == "on"
+            title_input = (form.get(f"chapter-{index}-title") or "").strip()
+            title = title_input or chapter.get("title") or f"Chapter {index + 1}"
+            voice_selection = form.get(f"chapter-{index}-voice", "__default")
+            formula_input = (form.get(f"chapter-{index}-formula") or "").strip()
 
-        entry: Dict[str, Any] = {
-            "id": chapter.get("id") or f"{index:04d}",
-            "index": index,
-            "order": index,
-            "source_title": chapter.get("title") or title,
-            "title": title,
-            "text": chapter.get("text", ""),
-            "enabled": enabled,
-        }
-        entry["characters"] = calculate_text_length(entry["text"])
+            entry: Dict[str, Any] = {
+                "id": chapter.get("id") or f"{index:04d}",
+                "index": index,
+                "order": index,
+                "source_title": chapter.get("title") or title,
+                "title": title,
+                "text": chapter.get("text", ""),
+                "enabled": enabled,
+            }
+            entry["characters"] = calculate_text_length(entry["text"])
 
-        if enabled:
-            if voice_selection.startswith("voice:"):
-                entry["voice"] = voice_selection.split(":", 1)[1]
-                entry["resolved_voice"] = entry["voice"]
-            elif voice_selection.startswith("profile:"):
-                profile_name = voice_selection.split(":", 1)[1]
-                entry["voice_profile"] = profile_name
-                profile_entry = profiles.get(profile_name) or {}
-                formula_value = formula_from_profile(profile_entry)
-                if formula_value:
-                    entry["voice_formula"] = formula_value
-                    entry["resolved_voice"] = formula_value
-                else:
-                    errors.append(f"Profile '{profile_name}' has no configured voices.")
-            elif voice_selection == "formula":
-                if not formula_input:
-                    errors.append(f"Provide a custom formula for chapter {index + 1}.")
-                else:
-                    try:
-                        parse_voice_formula(formula_input)
-                    except ValueError as exc:
-                        errors.append(str(exc))
+            if enabled:
+                if voice_selection.startswith("voice:"):
+                    entry["voice"] = voice_selection.split(":", 1)[1]
+                    entry["resolved_voice"] = entry["voice"]
+                elif voice_selection.startswith("profile:"):
+                    profile_name = voice_selection.split(":", 1)[1]
+                    entry["voice_profile"] = profile_name
+                    profile_entry = profiles.get(profile_name) or {}
+                    formula_value = formula_from_profile(profile_entry)
+                    if formula_value:
+                        entry["voice_formula"] = formula_value
+                        entry["resolved_voice"] = formula_value
                     else:
-                        entry["voice_formula"] = formula_input
-                        entry["resolved_voice"] = formula_input
-            selected_total += entry["characters"]
+                        errors.append(f"Profile '{profile_name}' has no configured voices.")
+                elif voice_selection == "formula":
+                    if not formula_input:
+                        errors.append(f"Provide a custom formula for chapter {index + 1}.")
+                    else:
+                        try:
+                            parse_voice_formula(formula_input)
+                        except ValueError as exc:
+                            errors.append(str(exc))
+                        else:
+                            entry["voice_formula"] = formula_input
+                            entry["resolved_voice"] = formula_input
+                selected_total += entry["characters"]
 
-        overrides.append(entry)
-        pending.chapters[index] = dict(entry)
+            overrides.append(entry)
+            pending.chapters[index] = dict(entry)
+    else:
+        overrides = [dict(chapter) for chapter in pending.chapters]
+        selected_total = sum(
+            int(chapter.get("characters", calculate_text_length(chapter.get("text", ""))))
+            for chapter in overrides
+            if chapter.get("enabled", True)
+        )
 
     enabled_overrides = [entry for entry in overrides if entry.get("enabled")]
+    if update_chapters and pending.chapters and not enabled_overrides:
+        errors.append("Select at least one chapter to continue.")
 
     heteronym_entries = getattr(pending, "heteronym_overrides", None)
     if isinstance(heteronym_entries, list) and heteronym_entries:
@@ -637,7 +650,9 @@ def build_pending_job_from_extraction(
         getattr(extraction, "combined_text", "")
     )
     chapters_source = getattr(extraction, "chapters", []) or []
-    chapters_payload = build_chapter_payload(chapters_source, source_name=original_name)
+    chapters_payload = build_chapter_payload(
+        chapters_source, source_name=original_name, preselect=False
+    )
 
     raw_language = str(form.get("language") or "a").strip() or "a"
     try:
@@ -645,9 +660,13 @@ def build_pending_job_from_extraction(
     except (ValueError, AttributeError):
         language = Language.EN_US
     profiles_map = dict(profiles) if isinstance(profiles, Mapping) else dict(profiles or {})
-    default_voice_setting = settings.get("default_voice") or ""
+    default_narrator_setting = (
+        settings.get("default_speaker")
+        or settings.get("default_voice")
+        or ""
+    )
     resolved_default_voice, inferred_profile, inferred_language = resolve_voice_setting(
-        default_voice_setting,
+        default_narrator_setting,
         profiles=profiles_map,
     )
     base_voice_input = str(form.get("voice") or "").strip()
@@ -657,7 +676,11 @@ def build_pending_job_from_extraction(
     if profile_selection in {"__standard", ""} and inferred_profile:
         profile_selection = inferred_profile
 
-    base_voice = base_voice_input or resolved_default_voice or str(default_voice_setting).strip()
+    base_voice = (
+        base_voice_input
+        or resolved_default_voice
+        or str(default_narrator_setting).strip()
+    )
     if not base_voice:
         base_voice = get_default_voice("kokoro")
     selected_speaker_config = (form.get("speaker_config") or "").strip()

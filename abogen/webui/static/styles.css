@@ -2366,6 +2366,10 @@ button.step-indicator__item:focus-visible {
 .form-section__title-row .form-section__title {
   margin-bottom: 0;
 }
+.form-section__actions {
+  display: flex;
+  gap: 0.5rem;
+}
 
 .prepare-summary__stats dl {
   margin: 0;

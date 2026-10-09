@@ -16,8 +16,6 @@ def remove_pending_job(pending_id: str) -> None:
 
 def submit_job(pending: PendingJob) -> str:
     service = get_service()
-    service.pop_pending_job(pending.id)
-    
     job = service.enqueue(
         original_filename=pending.original_filename,
         stored_path=pending.stored_path,
@@ -25,7 +23,7 @@ def submit_job(pending: PendingJob) -> str:
         tts_provider=getattr(pending, "tts_provider", "kokoro"),
         voice=pending.voice,
         speed=pending.speed,
-        supertonic_total_steps=getattr(pending, "supertonic_total_steps", 5),
+        supertonic_total_steps=getattr(pending, "supertonic_total_steps", 8),
         use_gpu=pending.use_gpu,
         subtitle_mode=pending.subtitle_mode,
         output_format=pending.output_format,
@@ -64,4 +62,5 @@ def submit_job(pending: PendingJob) -> str:
         heteronym_overrides=getattr(pending, "heteronym_overrides", None),
         normalization_overrides=pending.normalization_overrides,
     )
+    service.pop_pending_job(pending.id)
     return job.id

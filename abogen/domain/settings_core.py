@@ -193,7 +193,7 @@ SETTINGS_REGISTRY: list[Setting] = [
     Setting("speed", float, 1.0, min_value=0.5, max_value=3.0,
             gui_only=True,
             description="TTS speed multiplier"),
-    Setting("supertonic_total_steps", int, 5, min_value=2, max_value=15,
+    Setting("supertonic_total_steps", int, 8, min_value=2, max_value=15,
             description="SuperTonic processing steps"),
     Setting("supertonic_speed", float, 1.0, min_value=0.7, max_value=2.0,
             description="SuperTonic speed"),

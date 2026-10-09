@@ -32,15 +32,20 @@ from abogen.tts_plugin.types import EngineConfig
 from .engine import SuperTonicEngine
 
 
-def _load_supertonic_pipeline(language: Any = None, model_path: Path | None = None) -> Any:
+def _load_supertonic_pipeline(
+    language: Any = None,
+    model_path: Path | None = None,
+    device: str = "cpu",
+) -> Any:
     """Lazy-load SuperTonic dependencies and create pipeline."""
     from plugins.supertonic.pipeline import SupertonicPipeline
 
     return SupertonicPipeline(
         language=language,
+        device=device,
         sample_rate=24000,
         auto_download=True,
-        total_steps=5,
+        total_steps=8,
         model_dir=model_path,
     )
 
@@ -81,7 +86,7 @@ PLUGIN_MANIFEST = PluginManifest(
                 name="Quality Steps",
                 description="Inference steps (higher = better quality, slower)",
                 type="int",
-                default=5,
+                default=8,
                 min=2,
                 max=15,
                 step=1,
@@ -130,7 +135,11 @@ def create_engine(
         EngineError: On failure. Cleans up partially created resources.
     """
     try:
-        pipeline = _load_supertonic_pipeline(language=config.language, model_path=model_path)
+        pipeline = _load_supertonic_pipeline(
+            language=config.language,
+            model_path=model_path,
+            device=config.device,
+        )
         engine = SuperTonicEngine(pipeline)
         return engine
     except Exception as e:

@@ -356,8 +356,17 @@ const submitWizardForm = async (form, submitter) => {
     try {
       payload = text ? JSON.parse(text) : null;
     } catch (parseError) {
-      console.error("Failed to parse wizard response", parseError);
-      displayTransientError(modal, "Received an invalid response. Try again.");
+      const contentType = response.headers.get("content-type") || "unknown content type";
+      console.error("Failed to parse wizard response", {
+        error: parseError,
+        status: response.status,
+        contentType,
+        body: text.slice(0, 2000),
+      });
+      displayTransientError(
+        modal,
+        `Server returned an invalid response (HTTP ${response.status}, ${contentType}). Check the application log for details.`
+      );
       return;
     }
     processResponsePayload(payload, response.ok);

@@ -69,7 +69,7 @@ class ConversionRequest:
     voice_profile: Optional[str] = None
     speed: float = 1.0
     use_gpu: bool = True
-    supertonic_total_steps: int = 5
+    supertonic_total_steps: int = 8
 
     # --- Output Format ---
     output_format: OutputFormat = OutputFormat.WAV

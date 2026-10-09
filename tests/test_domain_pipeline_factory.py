@@ -30,11 +30,23 @@ class TestResolveDevice:
 class TestCreatePipelineForJob:
     @patch("abogen.domain.pipeline_factory.create_pipeline")
     @patch("abogen.domain.pipeline_factory.is_plugin_registered", return_value=True)
-    def test_supertonic_provider(self, _reg, mock_create):
+    @patch("abogen.domain.pipeline_factory.resolve_device", return_value="cuda:0")
+    def test_supertonic_provider(self, _device, _reg, mock_create):
         mock_create.return_value = MagicMock()
         result = create_pipeline_for_job("supertonic", Language.EN_US, use_gpu=True)
-        mock_create.assert_called_once_with("supertonic", language=Language.EN_US)
+        mock_create.assert_called_once_with(
+            "supertonic", language=Language.EN_US, device="cuda:0"
+        )
         assert result is mock_create.return_value
+
+    @patch("abogen.domain.pipeline_factory.create_pipeline")
+    @patch("abogen.domain.pipeline_factory.is_plugin_registered", return_value=True)
+    @patch("abogen.domain.pipeline_factory.resolve_device", return_value="cpu")
+    def test_supertonic_provider_respects_cpu_setting(self, _device, _reg, mock_create):
+        create_pipeline_for_job("supertonic", Language.EN_US, use_gpu=False)
+        mock_create.assert_called_once_with(
+            "supertonic", language=Language.EN_US, device="cpu"
+        )
 
     @patch("abogen.domain.pipeline_factory.create_pipeline")
     @patch("abogen.domain.pipeline_factory.is_plugin_registered", return_value=True)

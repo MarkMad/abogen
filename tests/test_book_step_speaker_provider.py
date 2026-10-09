@@ -1,8 +1,13 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from werkzeug.datastructures import MultiDict
 
-from abogen.webui.routes.utils.form import apply_book_step_form
+from abogen.domain.settings_core import settings_defaults
+from abogen.webui.routes.utils.form import (
+    apply_book_step_form,
+    build_pending_job_from_extraction,
+)
 from abogen.webui.service import PendingJob
 
 
@@ -81,3 +86,44 @@ def test_book_step_supertonic_profile_becomes_speaker_reference() -> None:
 
     # Book-level provider should not be overridden by narrator defaults.
     assert pending.tts_provider == "kokoro"
+
+
+def test_new_job_uses_default_supertonic_speaker_instead_of_kokoro_fallback(
+    tmp_path: Path,
+) -> None:
+    profiles = {
+        "Female HQ": {
+            "provider": "supertonic",
+            "voice": "F3",
+            "speed": 1.0,
+            "total_steps": 5,
+            "language": "a",
+        }
+    }
+    settings = settings_defaults()
+    settings.update(
+        {
+            "default_speaker": "speaker:Female HQ",
+            "default_voice": "af_alloy",
+        }
+    )
+    extraction = SimpleNamespace(
+        chapters=[SimpleNamespace(title="Chapter 1", text="Text")],
+        metadata={},
+        cover_image=None,
+        cover_mime=None,
+        total_characters=4,
+        combined_text="Text",
+    )
+
+    result = build_pending_job_from_extraction(
+        stored_path=tmp_path / "book.epub",
+        original_name="book.epub",
+        extraction=extraction,
+        form={"voice_profile": "Female HQ"},
+        settings=settings,
+        profiles=profiles,
+    )
+
+    assert result.pending.voice == "speaker:Female HQ"
+    assert result.pending.voice_profile == "Female HQ"

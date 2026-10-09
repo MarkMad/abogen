@@ -123,3 +123,38 @@ def test_apply_prepare_form_updates_closing_outro_flag():
     apply_prepare_form(pending, form)
 
     assert pending.read_closing_outro is False
+
+
+def test_apply_prepare_form_requires_at_least_one_selected_chapter():
+    pending = _make_pending_job()
+    pending.chapters = [
+        {"id": "0000", "title": "Chapter 1", "text": "Chapter content."}
+    ]
+    form = MultiDict({"chapter_intro_delay": "0.5"})
+
+    _, _, enabled_chapters, errors, *_ = apply_prepare_form(pending, form)
+
+    assert not enabled_chapters
+    assert "Select at least one chapter to continue." in errors
+
+
+def test_apply_prepare_form_can_preserve_chapter_state_on_entities_step():
+    pending = _make_pending_job()
+    pending.chapters = [
+        {
+            "id": "0000",
+            "title": "A very long chapter title",
+            "text": "Chapter content.",
+            "enabled": True,
+            "voice": "af_nova",
+        }
+    ]
+
+    _, overrides, enabled_chapters, errors, *_ = apply_prepare_form(
+        pending, MultiDict(), update_chapters=False
+    )
+
+    assert not errors
+    assert overrides == pending.chapters
+    assert enabled_chapters == pending.chapters
+    assert pending.chapters[0]["voice"] == "af_nova"

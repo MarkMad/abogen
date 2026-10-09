@@ -18,6 +18,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+SUPERTONIC_MAX_CHUNK_LENGTH = 300
+SUPERTONIC_KOREAN_MAX_CHUNK_LENGTH = 120
+SUPERTONIC_DEFAULT_TOTAL_STEPS = 8
+
 
 def _ensure_float32_mono(wav: Any) -> np.ndarray:
     arr = np.asarray(wav, dtype="float32")
@@ -122,7 +126,7 @@ def _remove_unsupported_characters(text: str, unsupported: Iterable[str]) -> str
     return result
 
 
-def _configure_supertonic_gpu() -> None:
+def _configure_supertonic_gpu(device: str) -> None:
     """Patch supertonic's config to enable GPU acceleration if available."""
     try:
         import onnxruntime as ort
@@ -130,7 +134,7 @@ def _configure_supertonic_gpu() -> None:
         available = ort.get_available_providers()
 
         providers = []
-        if "CUDAExecutionProvider" in available:
+        if device.startswith("cuda") and "CUDAExecutionProvider" in available:
             providers.append("CUDAExecutionProvider")
         providers.append("CPUExecutionProvider")
 
@@ -161,15 +165,15 @@ class SupertonicPipeline:
         self,
         *,
         language: Any = None,
+        device: str = "cpu",
         sample_rate: int,
         auto_download: bool = True,
-        total_steps: int = 5,
-        max_chunk_length: int = 300,
+        total_steps: int = SUPERTONIC_DEFAULT_TOTAL_STEPS,
+        max_chunk_length: Optional[int] = None,
         model_dir: Path | str | None = None,
     ) -> None:
         self.sample_rate = int(sample_rate)
         self.total_steps = int(total_steps)
-        self.max_chunk_length = int(max_chunk_length)
 
         # Resolve language to ISO 639-1 code for Supertonic
         if language is not None:
@@ -178,7 +182,14 @@ class SupertonicPipeline:
         else:
             self._lang = "en"
 
-        _configure_supertonic_gpu()
+        default_chunk_length = (
+            SUPERTONIC_KOREAN_MAX_CHUNK_LENGTH
+            if self._lang == "ko"
+            else SUPERTONIC_MAX_CHUNK_LENGTH
+        )
+        self.max_chunk_length = int(max_chunk_length or default_chunk_length)
+
+        _configure_supertonic_gpu(str(device).lower())
 
         try:
             from supertonic import TTS  # type: ignore[import-not-found]
@@ -190,20 +201,13 @@ class SupertonicPipeline:
         if model_dir is None:
             model_dir = os.environ.get("SUPERTONIC_CACHE_DIR")
         if model_dir is None:
-            # Older installations downloaded here before Abogen managed the cache.
-            # Only reuse a complete model set: the backend replaces incomplete
-            # model directories when auto_download is enabled.
-            legacy_dir = Path.home() / ".cache" / "supertonic2"
-            model_files = (
-                "duration_predictor.onnx", "text_encoder.onnx",
-                "vector_estimator.onnx", "vocoder.onnx",
-            )
-            if all((legacy_dir / "onnx" / name).is_file() for name in model_files):
-                model_dir = legacy_dir
-        if model_dir is None:
             from abogen.utils import get_user_cache_path
-            model_dir = get_user_cache_path("supertonic2")
-        self._tts = TTS(model_dir=model_dir, auto_download=auto_download)
+            model_dir = get_user_cache_path("supertonic3")
+        self._tts = TTS(
+            model="supertonic-3",
+            model_dir=model_dir,
+            auto_download=auto_download,
+        )
 
     def __call__(
         self,

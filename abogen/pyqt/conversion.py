@@ -1325,16 +1325,17 @@ class ConversionThread(QThread):
             metadata_options, cover_path = (
                 self._extract_and_add_metadata_tags_to_ffmpeg_cmd()
             )
+            cover_exists = bool(cover_path and os.path.exists(cover_path))
             cmd = build_ffmpeg_command(
                 Path(path),
                 self.output_format,
+                input_paths=[cover_path] if cover_exists else [],
             )
             cmd.insert(2, "-thread_queue_size")
             cmd.insert(3, "32768")
-            if cover_path and os.path.exists(cover_path):
+            if cover_exists:
                 output_path = cmd.pop()
                 cmd.extend([
-                    "-i", cover_path,
                     "-map", "0:a",
                     "-map", "1",
                     "-c:v", "copy",

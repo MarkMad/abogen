@@ -102,7 +102,7 @@ def resolve_voice_target(
     *,
     job_voice: str = "M1",
     job_tts_provider: str = "kokoro",
-    job_supertonic_total_steps: int = 5,
+    job_supertonic_total_steps: int = 8,
     job_speed: float = 1.0,
 ) -> Tuple[str, str, Optional[float], Optional[int]]:
     """Resolve a raw voice spec into (provider, voice_spec, speed_override, steps_override).
@@ -116,7 +116,7 @@ def resolve_voice_target(
         provider = str(entry.get("provider") or "kokoro").strip().lower() or "kokoro"
         if provider == "supertonic":
             voice = str(entry.get("voice") or job_voice or "M1").strip() or "M1"
-            steps = int(entry.get("total_steps") or job_supertonic_total_steps or 5)
+            steps = int(entry.get("total_steps") or job_supertonic_total_steps or 8)
             speed = float(entry.get("speed") or job_speed or 1.0)
             return "supertonic", supertonic_voice_from_spec(voice, job_voice), speed, steps
         formula = formula_from_kokoro_entry(entry)
