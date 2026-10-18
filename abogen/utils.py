@@ -423,9 +423,9 @@ _sleep_procs: Dict[str, Optional[subprocess.Popen[str]]] = {
 
 
 def clean_text(text, *args, **kwargs):
-    # Load replace_single_newlines from config
-    cfg = load_config()
-    replace_single_newlines = cfg.get("replace_single_newlines", False)
+    # Load replace_single_newlines from config (memoized; see
+    # get_replace_single_newlines for why this is not a plain file read).
+    replace_single_newlines = get_replace_single_newlines(default=False)
     # Collapse all whitespace (excluding newlines) into single spaces per line and trim edges
     lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in text.splitlines()]
     text = "\n".join(lines)
@@ -541,8 +541,24 @@ def load_config():
         return {}
 
 
+# Memoized values of the "replace_single_newlines" setting (per default
+# value) so that clean_text() — called once per chapter — does not re-read
+# the settings file for every chapter in large books. Invalidated whenever
+# the configuration is saved.
+_replace_single_newlines_memo: Dict[bool, bool] = {}
+
+
+def get_replace_single_newlines(default: bool) -> bool:
+    if default not in _replace_single_newlines_memo:
+        _replace_single_newlines_memo[default] = load_config().get(
+            "replace_single_newlines", default
+        )
+    return _replace_single_newlines_memo[default]
+
+
 def save_config(config):
     try:
+        _replace_single_newlines_memo.clear()
         with open(get_user_config_path(), "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
     except Exception:
@@ -568,6 +584,31 @@ def get_gpu_acceleration(enabled):
         # Check for CUDA
         if cuda_available():
             return "CUDA GPU available and enabled.", True
+
+        # Check for DirectML (Windows fallback): ONNX Runtime GPU path used
+        # by ONNX-based engines (e.g. SuperTonic) on DirectX 12 GPUs —
+        # including Qualcomm Adreno GPUs on Snapdragon devices.
+        if platform.system() == "Windows":
+            try:
+                import onnxruntime as _ort  # type: ignore[import-not-found]
+
+                available = _ort.get_available_providers()
+                directml = "DmlExecutionProvider" in available
+                qnn = "QNNExecutionProvider" in available
+                if directml or qnn:
+                    parts = []
+                    if directml:
+                        parts.append("DirectML GPU (SuperTonic)")
+                    if qnn:
+                        parts.append("QNN NPU (SuperTonic, may require quantized models)")
+                    return (
+                        "ONNX acceleration available and enabled: "
+                        + ", ".join(parts)
+                        + ". Kokoro will use the CPU.",
+                        True,
+                    )
+            except Exception:
+                pass
 
         # Gather CUDA diagnostic info if not available
         try:
