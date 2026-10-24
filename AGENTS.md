@@ -80,3 +80,80 @@ when it contains multiple sentences.
 - `tests/test_domain_conversion_pipeline.py` — `tts_segments` / spaCy
   segmentation helpers.
 - Full suite: `python -m pytest tests/ -q` (expect 1566+ passing).
+
+## Delegate tasks
+
+The main agent orchestrates delegated work and remains responsible for
+architecture, integration, verification, and the final result. Delegate via the
+`Agent` tool by picking the right *agent type* first, then (only if needed) a
+*model tier* that fits the complexity. Do not delegate by default: a spawned
+agent starts cold and must re-derive context.
+
+### Agent types
+
+- `Explore` — read-only search across many files/naming conventions; returns
+  conclusions, not file dumps. State breadth (`medium` or `very thorough`). Use
+  it to locate segmentation entry points, trace callers of `get_split_pattern`,
+  or map which tests cover a module. It locates code; it does not review it.
+- `Plan` — read-only architect for designing an implementation strategy,
+  listing critical files and trade-offs before a large or risky change.
+- `general-purpose` — multi-step research or implementation that can run in
+  parallel with the main agent's own work (bounded refactor, patch adapted
+  across several files, independent investigations).
+- `claude-code-guide` — only for questions about Claude Code / Agent SDK /
+  Claude API itself, not this codebase.
+
+### Model tier by complexity
+
+Omit `model` to inherit the main agent's model. Override only when the task
+clearly warrants it, and never silently pick a more expensive tier.
+
+| Complexity | Examples | Tier |
+|---|---|---|
+| Low — mechanical, read-only, well-specified | file/symbol lookup, listing callers, running the test suite and summarizing failures, bulk renames | `haiku` |
+| Medium — bounded implementation with a clear spec | adapting a patch across files, adding tests for a known contract, a refactor with an understood cause | `sonnet` |
+| High — subtle, cross-cutting, or contract-sensitive | root-causing a segmentation/subtitle regression, changes touching the hard invariants above, concurrency or pipeline timing bugs, security-sensitive code | `opus` (or keep on the main agent) |
+
+### Routing rules
+
+- Small, well-defined, low-risk edits (copy edits, minor styling, a one-line
+  fix with an understood cause, small test updates): do them directly.
+- Broad read-only context gathering: `Explore`.
+- Design before a large change: `Plan`, then implement.
+- Independent or self-contained multi-step work: `general-purpose`, in the
+  background if the main agent has useful work to continue.
+- Never delegate: changes to the segmentation/subtitle contract in this file,
+  edits to the hard invariants, broad integration, or final review. The main
+  agent owns these.
+- Both UIs (WebUI and PyQt) must stay in sync for any segmentation change; a
+  delegated change that touches one side must be checked against the other.
+
+### Briefs and lifecycle
+
+- Briefs must be self-contained: the request, relevant paths, constraints,
+  acceptance criteria, and which tests to run. State whether the agent may edit
+  files or is read-only.
+- Keep scope narrow. Ask for changed files, checks performed, and unresolved
+  issues. Do not let a sub-agent delegate further.
+- Launch independent agents in parallel (multiple `Agent` calls in one
+  response). Do not run two agents that edit the same files concurrently. Use
+  worktree isolation (`isolation: "worktree"`) when parallel edits could
+  overlap.
+- Completion of a background agent is delivered as a notification; do not poll
+  or sleep. To continue an agent with its context intact, use `SendMessage`
+  with its ID instead of spawning a new one.
+- While an agent works, do independent work (inspect callers, identify
+  regression risks, prepare verification); do not duplicate its task.
+
+### Verification and communication
+
+- An agent's report describes what it intended, not necessarily what it did.
+  Review the actual diff and run proportionate verification
+  (`python -m pytest tests/ -q`, or the targeted test files listed above for
+  segmentation work) before reporting completion.
+- Report faithfully: failing tests, skipped steps, and fallbacks are stated
+  plainly.
+- Answer simple conversational questions directly. If an agent type is
+  unavailable, do the work directly and briefly mention the fallback.
+- Do not ask for confirmation merely to use this workflow; respect the user's
+  latest instructions and permission boundaries.
