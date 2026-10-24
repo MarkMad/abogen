@@ -152,9 +152,14 @@ def open_audio_sink(
                 diagnostics.seek(0, os.SEEK_END)
                 diagnostics.seek(max(0, diagnostics.tell() - 16384))
                 detail = diagnostics.read().decode("utf-8", errors="replace").strip()
+                # Don't leave a truncated file behind to confuse later steps.
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 raise RuntimeError(
-                    f"FFmpeg encoding failed for {path} (exit code {returncode}): "
-                    f"{detail or 'No error output was produced'}"
+                    f"audio-sink ffmpeg failed (exit {returncode}) for {path}. "
+                    f"stderr tail:\n{detail or 'No error output was produced'}"
                 ) from pipe_error
             if pipe_error is not None:
                 raise pipe_error
