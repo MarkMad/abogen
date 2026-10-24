@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import itertools
 import logging
 import mimetypes
 import re
@@ -409,6 +410,21 @@ class EpubExtractor:
         self.book = epub.read_epub(str(path))
         self.doc_content: Dict[str, str] = {}
         self.spine_docs: List[str] = []
+        self._spine_pos: Dict[str, int] = {}
+        self._spine_pos_src: Optional[List[str]] = None
+
+    def _spine_index(self, href: str) -> int:
+        # First-occurrence index, equivalent to list.index() but O(1).
+        if self._spine_pos_src is not self.spine_docs:
+            pos: Dict[str, int] = {}
+            for i, doc in enumerate(self.spine_docs):
+                pos.setdefault(doc, i)
+            self._spine_pos = pos
+            self._spine_pos_src = self.spine_docs
+        try:
+            return self._spine_pos[href]
+        except KeyError:
+            raise ValueError(href) from None
 
     def extract(self) -> ExtractionResult:
         metadata_source = self._collect_metadata()
@@ -626,11 +642,12 @@ class EpubExtractor:
     def _process_spine_fallback(self) -> List[ExtractedChapter]:
         chapters: List[ExtractedChapter] = []
         self.spine_docs = self._build_spine_docs()
+        spine_set = set(self.spine_docs)
         self.doc_content = {}
 
         for item in self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             href = item.get_name()
-            if href not in self.spine_docs:
+            if href not in spine_set:
                 continue
             try:
                 html_content = item.get_content().decode("utf-8", errors="ignore")
@@ -868,25 +885,30 @@ class EpubExtractor:
         doc_order: Dict[str, int],
         doc_order_decoded: Dict[str, int],
     ) -> Tuple[Optional[str], Optional[int]]:
-        direct_candidates = [base_href, urllib.parse.unquote(base_href)]
-        # Fast path: try the exact (and URL-decoded) href before scanning
-        # every document name — avoids O(docs) work per nav entry, which
-        # is quadratic for large books.
-        for candidate in direct_candidates:
+        for candidate in (base_href, urllib.parse.unquote(base_href)):
             if candidate in doc_order:
                 return candidate, doc_order[candidate]
             if candidate in doc_order_decoded:
                 return candidate, doc_order_decoded[candidate]
-        candidates = list(direct_candidates)
+
+        # Basename fallback via a lookup built once per doc_order mapping.
+        cache = getattr(self, "_basename_cache", None)
+        if (
+            cache is None
+            or cache[0] is not doc_order
+            or cache[1] is not doc_order_decoded
+        ):
+            by_name: Dict[str, str] = {}
+            for key in itertools.chain(doc_order, doc_order_decoded):
+                by_name.setdefault(key.split("/")[-1].lower(), key)
+            cache = (doc_order, doc_order_decoded, by_name)
+            self._basename_cache = cache
         base_name = urllib.parse.unquote(base_href).split("/")[-1].lower()
-        for key in list(doc_order.keys()) + list(doc_order_decoded.keys()):
-            if key.split("/")[-1].lower() == base_name:
-                candidates.append(key)
-        for candidate in candidates[2:]:
-            if candidate in doc_order:
-                return candidate, doc_order[candidate]
-            if candidate in doc_order_decoded:
-                return candidate, doc_order_decoded[candidate]
+        key = cache[2].get(base_name)
+        if key is not None:
+            if key in doc_order:
+                return key, doc_order[key]
+            return key, doc_order_decoded[key]
         return None, None
 
     def _find_position_robust(self, doc_href: str, fragment_id: Optional[str]) -> int:
@@ -897,9 +919,19 @@ class EpubExtractor:
         if not fragment_id:
             return 0
 
-        # Fast path: regex for the id/name attribute. This avoids a full
-        # BeautifulSoup re-parse of the document for every nav entry,
-        # which is very slow for large books with per-chapter anchors.
+        try:
+            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
+            target_element = temp_soup.find(id=fragment_id)
+            if target_element:
+                tag_str = str(target_element)
+                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
+                if pos != -1:
+                    return pos
+        except Exception:
+            logger.debug(
+                "BeautifulSoup failed to locate id '%s' in %s", fragment_id, doc_href
+            )
+
         safe_fragment_id = re.escape(fragment_id)
         id_name_pattern = re.compile(
             f"<[^>]+(?:id|name)\\s*=\\s*[\"']{safe_fragment_id}[\"']",
@@ -916,21 +948,6 @@ class EpubExtractor:
             pos = min(candidates)
             tag_start = html_content.rfind("<", 0, pos)
             return tag_start if tag_start != -1 else pos
-
-        # Last-resort fallback: let BeautifulSoup resolve attribute formats
-        # the regex cannot match (e.g. unquoted values).
-        try:
-            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
-            target_element = temp_soup.find(id=fragment_id)
-            if target_element:
-                tag_str = str(target_element)
-                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
-                if pos != -1:
-                    return pos
-        except Exception:
-            logger.debug(
-                "BeautifulSoup failed to locate id '%s' in %s", fragment_id, doc_href
-            )
 
         logger.warning(
             "Anchor '%s' not found in %s. Defaulting to start.", fragment_id, doc_href
@@ -987,7 +1004,7 @@ class EpubExtractor:
     def _docs_between(self, current_doc: str, next_doc: Optional[str]) -> List[str]:
         docs: List[str] = []
         try:
-            current_idx = self.spine_docs.index(current_doc)
+            current_idx = self._spine_index(current_doc)
         except ValueError:
             return docs
 
@@ -996,7 +1013,7 @@ class EpubExtractor:
             return docs
 
         try:
-            next_idx = self.spine_docs.index(next_doc)
+            next_idx = self._spine_index(next_doc)
         except ValueError:
             return docs
 
@@ -1022,7 +1039,7 @@ class EpubExtractor:
 
         prefix_html = ""
         try:
-            first_idx = self.spine_docs.index(first_doc)
+            first_idx = self._spine_index(first_doc)
         except ValueError:
             first_idx = -1
 

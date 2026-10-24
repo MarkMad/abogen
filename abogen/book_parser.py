@@ -1,3 +1,4 @@
+import itertools
 import os
 import re
 import logging
@@ -480,28 +481,26 @@ class EpubParser(BaseBookParser):
         return metadata
 
     def _find_doc_key(self, base_href, doc_order, doc_order_decoded):
-        direct_candidates = [
-            base_href,
-            urllib.parse.unquote(base_href),
-        ]
-        # Fast path: try the exact (and URL-decoded) href before scanning
-        # every document name — avoids O(docs) work per nav entry, which
-        # is quadratic for large books.
-        for candidate in direct_candidates:
+        for candidate in (base_href, urllib.parse.unquote(base_href)):
             if candidate in doc_order:
                 return candidate, doc_order[candidate]
-            elif candidate in doc_order_decoded:
+            if candidate in doc_order_decoded:
                 return candidate, doc_order_decoded[candidate]
-        candidates = list(direct_candidates)
-        base_name = os.path.basename(base_href).lower()
-        for k in list(doc_order.keys()) + list(doc_order_decoded.keys()):
-            if os.path.basename(k).lower() == base_name:
-                candidates.append(k)
-        for candidate in candidates[2:]:
-            if candidate in doc_order:
-                return candidate, doc_order[candidate]
-            elif candidate in doc_order_decoded:
-                return candidate, doc_order_decoded[candidate]
+
+        # Fall back to a basename match, using a lookup built once per
+        # doc_order mapping instead of scanning every document per call.
+        cache = getattr(self, "_basename_cache", None)
+        if cache is None or cache[0] is not doc_order or cache[1] is not doc_order_decoded:
+            by_name = {}
+            for k in itertools.chain(doc_order, doc_order_decoded):
+                by_name.setdefault(os.path.basename(k).lower(), k)
+            cache = (doc_order, doc_order_decoded, by_name)
+            self._basename_cache = cache
+        key = cache[2].get(os.path.basename(base_href).lower())
+        if key is not None:
+            if key in doc_order:
+                return key, doc_order[key]
+            return key, doc_order_decoded[key]
         return None, None
 
     def _find_position_robust(self, doc_href, fragment_id):
@@ -512,9 +511,17 @@ class EpubParser(BaseBookParser):
         if not fragment_id:
             return 0
 
-        # Fast path: regex for the id/name attribute. This avoids a full
-        # BeautifulSoup re-parse of the document for every nav entry,
-        # which is very slow for large books with per-chapter anchors.
+        try:
+            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
+            target_element = temp_soup.find(id=fragment_id)
+            if target_element:
+                tag_str = str(target_element)
+                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
+                if pos != -1:
+                    return pos
+        except Exception as e:
+            logging.warning(f"BeautifulSoup failed to find id='{fragment_id}': {e}")
+
         safe_fragment_id = re.escape(fragment_id)
         id_name_pattern = re.compile(
             f"<[^>]+(?:id|name)\\s*=\\s*[\"']{safe_fragment_id}[\"']", re.IGNORECASE
@@ -540,19 +547,6 @@ class EpubParser(BaseBookParser):
             tag_start_pos = html_content.rfind("<", 0, pos)
             final_pos = tag_start_pos if tag_start_pos != -1 else 0
             return final_pos
-
-        # Last-resort fallback: let BeautifulSoup resolve attribute formats
-        # the regex cannot match (e.g. unquoted values).
-        try:
-            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
-            target_element = temp_soup.find(id=fragment_id)
-            if target_element:
-                tag_str = str(target_element)
-                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
-                if pos != -1:
-                    return pos
-        except Exception as e:
-            logging.warning(f"BeautifulSoup failed to find id='{fragment_id}': {e}")
 
         logging.warning(
             f"Anchor '{fragment_id}' not found in {doc_href}. Defaulting to position 0."
@@ -815,6 +809,10 @@ class EpubParser(BaseBookParser):
             if item:
                 spine_docs.append(item.get_name())
         doc_order = {href: i for i, href in enumerate(spine_docs)}
+        # First-occurrence position per doc, equivalent to list.index() in O(1).
+        spine_pos = {}
+        for i, href in enumerate(spine_docs):
+            spine_pos.setdefault(href, i)
         doc_order_decoded = {
             urllib.parse.unquote(href): i for href, i in doc_order.items()
         }
@@ -826,7 +824,6 @@ class EpubParser(BaseBookParser):
         # expensive and recomputing it once per document is wasteful.
         nav_nodes = nav_soup.find_all(["content", "a"])
         nav_srcs = [nav_point.get("src", "") for nav_point in nav_nodes]
-        spine_index = {href: i for i, href in enumerate(spine_docs)}
 
         for item in self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             href = item.get_name()
@@ -904,8 +901,8 @@ class EpubParser(BaseBookParser):
                 else:
                     slice_parts = [current_doc_html[start_slice_pos:]]
                     try:
-                        idx_current = spine_index.get(current_doc)
-                        idx_next = spine_index.get(next_doc)
+                        idx_current = spine_pos.get(current_doc)
+                        idx_next = spine_pos.get(next_doc)
                         if (
                             idx_current is not None
                             and idx_next is not None
@@ -933,7 +930,7 @@ class EpubParser(BaseBookParser):
             else:
                 slice_parts = [current_doc_html[start_slice_pos:]]
                 try:
-                    idx_current = spine_index.get(current_doc)
+                    idx_current = spine_pos.get(current_doc)
                     if idx_current is not None:
                         for doc_idx in range(idx_current + 1, len(spine_docs)):
                             slice_parts.append(
@@ -1032,9 +1029,10 @@ class EpubParser(BaseBookParser):
             else:
                 logging.warning(f"Spine item with id '{item_id}' not found.")
 
+        spine_set = set(spine_docs)
         for item in self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             href = item.get_name()
-            if href in spine_docs:
+            if href in spine_set:
                 try:
                     html_content = item.get_content().decode("utf-8", errors="ignore")
                     self.doc_content[href] = html_content
