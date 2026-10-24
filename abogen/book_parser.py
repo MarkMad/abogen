@@ -480,15 +480,24 @@ class EpubParser(BaseBookParser):
         return metadata
 
     def _find_doc_key(self, base_href, doc_order, doc_order_decoded):
-        candidates = [
+        direct_candidates = [
             base_href,
             urllib.parse.unquote(base_href),
         ]
+        # Fast path: try the exact (and URL-decoded) href before scanning
+        # every document name — avoids O(docs) work per nav entry, which
+        # is quadratic for large books.
+        for candidate in direct_candidates:
+            if candidate in doc_order:
+                return candidate, doc_order[candidate]
+            elif candidate in doc_order_decoded:
+                return candidate, doc_order_decoded[candidate]
+        candidates = list(direct_candidates)
         base_name = os.path.basename(base_href).lower()
         for k in list(doc_order.keys()) + list(doc_order_decoded.keys()):
             if os.path.basename(k).lower() == base_name:
                 candidates.append(k)
-        for candidate in candidates:
+        for candidate in candidates[2:]:
             if candidate in doc_order:
                 return candidate, doc_order[candidate]
             elif candidate in doc_order_decoded:
@@ -503,17 +512,9 @@ class EpubParser(BaseBookParser):
         if not fragment_id:
             return 0
 
-        try:
-            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
-            target_element = temp_soup.find(id=fragment_id)
-            if target_element:
-                tag_str = str(target_element)
-                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
-                if pos != -1:
-                    return pos
-        except Exception as e:
-            logging.warning(f"BeautifulSoup failed to find id='{fragment_id}': {e}")
-
+        # Fast path: regex for the id/name attribute. This avoids a full
+        # BeautifulSoup re-parse of the document for every nav entry,
+        # which is very slow for large books with per-chapter anchors.
         safe_fragment_id = re.escape(fragment_id)
         id_name_pattern = re.compile(
             f"<[^>]+(?:id|name)\\s*=\\s*[\"']{safe_fragment_id}[\"']", re.IGNORECASE
@@ -539,6 +540,19 @@ class EpubParser(BaseBookParser):
             tag_start_pos = html_content.rfind("<", 0, pos)
             final_pos = tag_start_pos if tag_start_pos != -1 else 0
             return final_pos
+
+        # Last-resort fallback: let BeautifulSoup resolve attribute formats
+        # the regex cannot match (e.g. unquoted values).
+        try:
+            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
+            target_element = temp_soup.find(id=fragment_id)
+            if target_element:
+                tag_str = str(target_element)
+                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
+                if pos != -1:
+                    return pos
+        except Exception as e:
+            logging.warning(f"BeautifulSoup failed to find id='{fragment_id}': {e}")
 
         logging.warning(
             f"Anchor '{fragment_id}' not found in {doc_href}. Defaulting to position 0."
@@ -808,11 +822,16 @@ class EpubParser(BaseBookParser):
         self.content_texts = {}
         self.content_lengths = {}
 
+        # Hoist the nav node scan out of the per-document loop; find_all is
+        # expensive and recomputing it once per document is wasteful.
+        nav_nodes = nav_soup.find_all(["content", "a"])
+        nav_srcs = [nav_point.get("src", "") for nav_point in nav_nodes]
+        spine_index = {href: i for i, href in enumerate(spine_docs)}
+
         for item in self.book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             href = item.get_name()
             if href in doc_order or any(
-                href in nav_point.get("src", "")
-                for nav_point in nav_soup.find_all(["content", "a"])
+                href in nav_point_src for nav_point_src in nav_srcs
             ):
                 try:
                     self.doc_content[href] = item.get_content().decode(
@@ -883,38 +902,46 @@ class EpubParser(BaseBookParser):
                 if current_doc == next_doc:
                     slice_html = current_doc_html[start_slice_pos:next_pos]
                 else:
-                    slice_html = current_doc_html[start_slice_pos:]
-                    docs_between = []
+                    slice_parts = [current_doc_html[start_slice_pos:]]
                     try:
-                        idx_current = spine_docs.index(current_doc)
-                        idx_next = spine_docs.index(next_doc)
-                        if idx_current < idx_next:
-                            docs_between = [
-                                spine_docs[k] for k in range(idx_current + 1, idx_next)
-                            ]
-                        elif idx_current > idx_next:
-                            docs_between = [
-                                spine_docs[k]
-                                for k in range(idx_current + 1, len(spine_docs))
-                            ]
-                            docs_between.extend(
-                                [spine_docs[k] for k in range(0, idx_next)]
-                            )
+                        idx_current = spine_index.get(current_doc)
+                        idx_next = spine_index.get(next_doc)
+                        if (
+                            idx_current is not None
+                            and idx_next is not None
+                            and idx_current < idx_next
+                        ):
+                            for k in range(idx_current + 1, idx_next):
+                                slice_parts.append(
+                                    self.doc_content.get(spine_docs[k], "")
+                                )
+                        elif idx_current is not None and idx_next is not None:
+                            for k in range(idx_current + 1, len(spine_docs)):
+                                slice_parts.append(
+                                    self.doc_content.get(spine_docs[k], "")
+                                )
+                            for k in range(0, idx_next):
+                                slice_parts.append(
+                                    self.doc_content.get(spine_docs[k], "")
+                                )
                     except ValueError:
                         pass
 
-                    for doc_href in docs_between:
-                        slice_html += self.doc_content.get(doc_href, "")
                     next_doc_html = self.doc_content.get(next_doc, "")
-                    slice_html += next_doc_html[:next_pos]
+                    slice_parts.append(next_doc_html[:next_pos])
+                    slice_html = "".join(slice_parts)
             else:
-                slice_html = current_doc_html[start_slice_pos:]
+                slice_parts = [current_doc_html[start_slice_pos:]]
                 try:
-                    idx_current = spine_docs.index(current_doc)
-                    for doc_idx in range(idx_current + 1, len(spine_docs)):
-                        slice_html += self.doc_content.get(spine_docs[doc_idx], "")
+                    idx_current = spine_index.get(current_doc)
+                    if idx_current is not None:
+                        for doc_idx in range(idx_current + 1, len(spine_docs)):
+                            slice_parts.append(
+                                self.doc_content.get(spine_docs[doc_idx], "")
+                            )
                 except ValueError:
                     pass
+                slice_html = "".join(slice_parts)
 
             if not slice_html.strip() and current_doc_html:
                 slice_html = current_doc_html
@@ -956,15 +983,18 @@ class EpubParser(BaseBookParser):
             first_doc_href = first_entry["doc_href"]
             first_pos = first_entry["position"]
             first_doc_order = first_entry["doc_order"]
-            prefix_html = ""
+            prefix_parts = []
 
             for doc_idx in range(first_doc_order):
                 if doc_idx < len(spine_docs):
                     intermediate_doc_href = spine_docs[doc_idx]
-                    prefix_html += self.doc_content.get(intermediate_doc_href, "")
+                    prefix_parts.append(
+                        self.doc_content.get(intermediate_doc_href, "")
+                    )
 
             first_doc_html = self.doc_content.get(first_doc_href, "")
-            prefix_html += first_doc_html[:first_pos]
+            prefix_parts.append(first_doc_html[:first_pos])
+            prefix_html = "".join(prefix_parts)
 
             if prefix_html.strip():
                 prefix_soup = BeautifulSoup(prefix_html, "html.parser")

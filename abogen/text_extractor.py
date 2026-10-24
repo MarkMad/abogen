@@ -868,12 +868,21 @@ class EpubExtractor:
         doc_order: Dict[str, int],
         doc_order_decoded: Dict[str, int],
     ) -> Tuple[Optional[str], Optional[int]]:
-        candidates = {base_href, urllib.parse.unquote(base_href)}
+        direct_candidates = [base_href, urllib.parse.unquote(base_href)]
+        # Fast path: try the exact (and URL-decoded) href before scanning
+        # every document name — avoids O(docs) work per nav entry, which
+        # is quadratic for large books.
+        for candidate in direct_candidates:
+            if candidate in doc_order:
+                return candidate, doc_order[candidate]
+            if candidate in doc_order_decoded:
+                return candidate, doc_order_decoded[candidate]
+        candidates = list(direct_candidates)
         base_name = urllib.parse.unquote(base_href).split("/")[-1].lower()
         for key in list(doc_order.keys()) + list(doc_order_decoded.keys()):
             if key.split("/")[-1].lower() == base_name:
-                candidates.add(key)
-        for candidate in candidates:
+                candidates.append(key)
+        for candidate in candidates[2:]:
             if candidate in doc_order:
                 return candidate, doc_order[candidate]
             if candidate in doc_order_decoded:
@@ -888,19 +897,9 @@ class EpubExtractor:
         if not fragment_id:
             return 0
 
-        try:
-            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
-            target_element = temp_soup.find(id=fragment_id)
-            if target_element:
-                tag_str = str(target_element)
-                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
-                if pos != -1:
-                    return pos
-        except Exception:
-            logger.debug(
-                "BeautifulSoup failed to locate id '%s' in %s", fragment_id, doc_href
-            )
-
+        # Fast path: regex for the id/name attribute. This avoids a full
+        # BeautifulSoup re-parse of the document for every nav entry,
+        # which is very slow for large books with per-chapter anchors.
         safe_fragment_id = re.escape(fragment_id)
         id_name_pattern = re.compile(
             f"<[^>]+(?:id|name)\\s*=\\s*[\"']{safe_fragment_id}[\"']",
@@ -917,6 +916,21 @@ class EpubExtractor:
             pos = min(candidates)
             tag_start = html_content.rfind("<", 0, pos)
             return tag_start if tag_start != -1 else pos
+
+        # Last-resort fallback: let BeautifulSoup resolve attribute formats
+        # the regex cannot match (e.g. unquoted values).
+        try:
+            temp_soup = BeautifulSoup(f"<div>{html_content}</div>", "html.parser")
+            target_element = temp_soup.find(id=fragment_id)
+            if target_element:
+                tag_str = str(target_element)
+                pos = html_content.find(tag_str[: min(len(tag_str), 200)])
+                if pos != -1:
+                    return pos
+        except Exception:
+            logger.debug(
+                "BeautifulSoup failed to locate id '%s' in %s", fragment_id, doc_href
+            )
 
         logger.warning(
             "Anchor '%s' not found in %s. Defaulting to start.", fragment_id, doc_href
@@ -951,17 +965,17 @@ class EpubExtractor:
         if next_entry and next_entry.doc_href == current_doc:
             return current_html[current_pos : next_entry.position]
 
-        slice_html = current_html[current_pos:]
+        parts = [current_html[current_pos:]]
         if next_entry:
-            docs_between = self._docs_between(current_doc, next_entry.doc_href)
-            for doc_href in docs_between:
-                slice_html += self.doc_content.get(doc_href, "")
+            for doc_href in self._docs_between(current_doc, next_entry.doc_href):
+                parts.append(self.doc_content.get(doc_href, ""))
             next_doc_html = self.doc_content.get(next_entry.doc_href, "")
-            slice_html += next_doc_html[: next_entry.position]
+            parts.append(next_doc_html[: next_entry.position])
         else:
             for doc_href in self._docs_between(current_doc, None):
-                slice_html += self.doc_content.get(doc_href, "")
+                parts.append(self.doc_content.get(doc_href, ""))
 
+        slice_html = "".join(parts)
         if not slice_html.strip():
             logger.warning(
                 "No content found for navigation source '%s'. Using full document fallback.",

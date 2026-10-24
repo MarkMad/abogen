@@ -1,5 +1,5 @@
 import re
-from abogen.utils import detect_encoding, load_config
+from abogen.utils import detect_encoding, get_replace_single_newlines
 from abogen.constants import SAMPLE_VOICE_TEXTS
 from abogen.domain.enums import Language
 
@@ -39,9 +39,10 @@ def clean_subtitle_text(text):
 def clean_text(text, *args, **kwargs):
     # Remove metadata tags first
     text = _METADATA_TAG_PATTERN.sub("", text)
-    # Load replace_single_newlines from config
-    cfg = load_config()
-    replace_single_newlines = cfg.get("replace_single_newlines", True)
+    # Load replace_single_newlines from config (memoized; see
+    # abogen.utils.get_replace_single_newlines for why this is not a
+    # plain file read).
+    replace_single_newlines = get_replace_single_newlines(default=True)
     # Collapse all whitespace (excluding newlines) into single spaces per line and trim edges
     # Use pre-compiled pattern for better performance
     lines = [_WHITESPACE_PATTERN.sub(" ", line).strip() for line in text.splitlines()]
